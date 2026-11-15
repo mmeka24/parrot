@@ -45,19 +45,24 @@ const fallbackDubbing: DubbingPort = {
 };
 
 /**
- * Fallback QC. Deliberately fails ~1 in 5 so the loss path is visible in a
- * demo without credentials - the brief asks for one live QC rejection, and a
- * gate that always passes would be a lie about what QC does.
+ * Fallback QC.
+ *
+ * Failure is DETERMINISTIC, driven by `forceFail` on the job, not random. A
+ * randomly-failing gate would sometimes rob a live demo of the loss path the
+ * brief explicitly asks to show, and a gate that always passed would be a lie
+ * about what QC does. One seeded job is marked to fail, so the rejection is
+ * always visible and always reproducible.
  */
 const fallbackQc: QcPort = {
-  async run({ targetLang, sourceDurationS, dubDurationS }) {
+  async run({ targetLang, sourceDurationS, dubDurationS, forceFail }) {
     const durationOk = Math.abs(dubDurationS - sourceDurationS) / sourceDurationS <= 0.1;
-    const languageOk = Math.random() > 0.2;
+    const languageOk = !forceFail;
     return {
       passed: durationOk && languageOk,
       checks: [
         {
           name: 'duration_match',
+          status: durationOk ? 'passed' : 'failed',
           passed: durationOk,
           detail: durationOk
             ? `The dub runs ${dubDurationS.toFixed(0)}s against a ${sourceDurationS.toFixed(0)}s original.`
@@ -65,6 +70,7 @@ const fallbackQc: QcPort = {
         },
         {
           name: 'language_detect',
+          status: languageOk ? 'passed' : 'failed',
           passed: languageOk,
           detail: languageOk
             ? `It sounds like ${languageName(targetLang)}, as requested.`
@@ -72,8 +78,12 @@ const fallbackQc: QcPort = {
         },
         {
           name: 'audio_sanity',
+          // Skipped, not passed. ffmpeg is absent, so this check did not run,
+          // and it must not be reported as though it had.
+          status: 'skipped',
           passed: true,
-          detail: 'Audio checks were skipped: ffmpeg is not installed here.',
+          detail: 'Skipped: the audio analyser (ffmpeg) is not installed here.',
+          measured: { skipped: true, reason: 'ffmpeg_not_installed' },
         },
       ],
       ranAt: new Date(),
@@ -157,6 +167,9 @@ async function main(): Promise<void> {
       targetLang: 'es',
       durationS: post.videoDurationS ?? 30,
       category: 'comedy',
+      // Chef Leo's clip has good numbers, so the agents will take it - and then
+      // it fails the gate. That is the loss path the demo needs to show.
+      qcDemoFail: creator.handle === 'chefleo',
       signals: {
         likes: post.metrics?.likes ?? 0,
         replies: post.metrics?.replies ?? 0,

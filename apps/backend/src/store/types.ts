@@ -96,6 +96,12 @@ export interface Job {
   signals: EngagementSignals | null;
   /** Realised international views. Simulated in demo mode. */
   viewCount: number;
+  /**
+   * Demo determinism: when true, the fallback QC gate fails this job on
+   * purpose. The brief requires a visible QC rejection, and a randomly-failing
+   * gate would sometimes deny the demo its loss path.
+   */
+  qcDemoFail: boolean;
   createdAt: Date;
   publishedAt: Date | null;
 }

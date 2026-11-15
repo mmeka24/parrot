@@ -11,8 +11,9 @@
  *      revenue wallet. Same-chain, instant. THIS IS THE STEP THAT TURNS
  *      BATCHED UNLOCKS INTO REAL MONEY.
  *   2. `runOnce()` - sweep the ledger, work out what each agent and creator is
- *      owed for each job, and hand anything over SETTLEMENT_THRESHOLD to
- *      `PaymentService.settle()`, which does the audited on-chain transfer.
+ *      owed for each job, and once a job owes more than SETTLEMENT_THRESHOLD in
+ *      total, hand each side's amount to `PaymentService.settle()`, which does
+ *      the audited on-chain transfer.
  *
  * SAFETY PROPERTIES, each one deliberate:
  *
@@ -75,7 +76,7 @@ export interface SettlementRunResult {
   readonly reentered: boolean;
   readonly jobsConsidered: number;
   readonly legsConsidered: number;
-  /** Legs with owed > 0 that were below SETTLEMENT_THRESHOLD. */
+  /** Legs owed something on a job whose TOTAL was under SETTLEMENT_THRESHOLD. */
   readonly legsBelowThreshold: number;
   readonly settlements: readonly Settlement[];
   readonly totalPaid: Micros;
@@ -205,12 +206,25 @@ export class SettlementScheduler {
       }
       legsConsidered += legs.length;
 
+      // THE THRESHOLD IS PER JOB, NOT PER LEG. Amounts are still aggregated per
+      // (job, recipient) - that is what each payout is - but the decision to
+      // pay at all is made on the job's TOTAL outstanding.
+      //
+      // Why: the two legs of a job cross a per-leg threshold at different
+      // unlock counts (at 40/60 the creator crosses $0.10 at 9 unlocks, the
+      // agent at 13). Gating each leg separately lets them leapfrog forever, so
+      // a job never reaches "both sides fully paid" and its unlocks could never
+      // be closed out. Gating on the job total keeps the economic intent of
+      // SETTLEMENT_THRESHOLD - no transfer for less than $0.10 of revenue - and
+      // always leaves the job reachable from open to settled.
+      const jobOwed = legs.reduce((total, leg) => total + (leg.owed as bigint), 0n);
+      if (jobOwed > 0n && jobOwed < (SETTLEMENT_THRESHOLD as bigint)) {
+        legsBelowThreshold += legs.filter((leg) => (leg.owed as bigint) > 0n).length;
+        continue;
+      }
+
       for (const leg of legs) {
         if ((leg.owed as bigint) <= 0n) continue;
-        if ((leg.owed as bigint) < (SETTLEMENT_THRESHOLD as bigint)) {
-          legsBelowThreshold++;
-          continue;
-        }
         try {
           const settlement = await this.settleLeg(leg);
           settlements.push(settlement);

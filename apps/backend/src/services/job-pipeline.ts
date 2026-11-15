@@ -65,6 +65,8 @@ export interface QcPort {
     sourceDurationS: number;
     dubDurationS: number;
     targetLang: string;
+    /** Demo determinism: force this dub to fail the gate. */
+    forceFail?: boolean;
   }): Promise<QcReport>;
 }
 
@@ -77,6 +79,7 @@ export interface CreateJobInput {
   durationS: number;
   category: Category;
   signals: Job['signals'];
+  qcDemoFail?: boolean;
 }
 
 export type IntakeResult =
@@ -178,6 +181,7 @@ export class JobPipeline {
       failureReason: null,
       signals: input.signals,
       viewCount: 0,
+      qcDemoFail: input.qcDemoFail ?? false,
       publishedAt: null,
     });
 
@@ -351,6 +355,7 @@ export class JobPipeline {
       sourceDurationS: job.durationS,
       dubDurationS: job.durationS,
       targetLang: job.targetLang,
+      forceFail: job.qcDemoFail,
     });
 
     if (!report.passed) {

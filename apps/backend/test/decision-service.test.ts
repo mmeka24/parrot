@@ -104,6 +104,7 @@ function workedExampleJob(store: Store, overrides: Partial<Job> = {}): Job {
       ageHours: 2,
     },
     viewCount: 0,
+    qcDemoFail: false,
     publishedAt: null,
     ...overrides,
   });

@@ -163,6 +163,18 @@ export type Decision = z.infer<typeof decisionSchema>;
 
 export const qcCheckSchema = z.object({
   name: z.enum(['duration_match', 'language_detect', 'audio_sanity', 'back_translation']),
+  /**
+   * THE TRUTHFUL FIELD. A check that could not run is `skipped`, never
+   * `passed`.
+   *
+   * `passed` below is a convenience for gating: a skipped check sets it true so
+   * it does not block publication (we must not reject a dub because ffmpeg is
+   * missing on the machine). But reading `passed` alone would make a skipped
+   * check look like a check that ran and succeeded, which is exactly the kind
+   * of quiet overclaim this project refuses to make. So `status` is required,
+   * it is what the dashboard renders, and it survives parsing.
+   */
+  status: z.enum(['passed', 'failed', 'skipped']),
   passed: z.boolean(),
   /** Human-readable detail, shown on the dashboard when it fails. */
   detail: z.string(),
