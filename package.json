@@ -1,0 +1,33 @@
+{
+  "name": "parrot",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Parrot — the dubbing agent that earns its own money. UBC 26 hackathon.",
+  "license": "MIT",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20.9"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "npm run typecheck",
+    "db:push": "npm run db:push -w @parrot/backend",
+    "db:seed": "npm run db:seed -w @parrot/backend",
+    "dev:backend": "npm run dev -w @parrot/backend",
+    "dev:web": "npm run dev -w @parrot/web",
+    "dev:agents": "npm run dev -w @parrot/agents",
+    "demo": "node scripts/demo.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,25 @@
+node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# secrets — never commit
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# runtime artifacts
+storage/
+tmp/
+*.log
+.DS_Store
+Thumbs.db
+
+# test/demo media output
+apps/backend/media/
+playwright-report/
+test-results/
