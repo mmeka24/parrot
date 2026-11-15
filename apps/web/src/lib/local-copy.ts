@@ -148,6 +148,11 @@ export const localCopy = {
     emptyTitle: 'Nothing here yet',
     emptyBody: 'Post a mention above and Parrot will answer.',
     hintTitle: 'Try one of these',
+    videoBadge: 'Video',
+    likes: 'likes',
+    replies: 'replies',
+    reposts: 'reposts',
+    views: 'views',
   },
 
   shell: {

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { MoneyDto } from '@parrot/shared';
+import { ParrotMark } from './ParrotMark';
 
 /**
  * Small shared primitives. Everything money-shaped renders `display` verbatim:
@@ -148,6 +149,30 @@ export function formatWhen(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
   return d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+}
+
+/** Round avatar: the bird for Parrot's own replies, initials for everyone else. */
+export function ParrotAvatar({ isBot, handle }: { isBot: boolean; handle: string }) {
+  return (
+    <div
+      aria-hidden
+      style={{
+        width: 42,
+        height: 42,
+        flex: '0 0 auto',
+        borderRadius: 999,
+        display: 'grid',
+        placeItems: 'center',
+        background: isBot ? 'var(--mango-wash)' : 'var(--paper-sunk)',
+        border: '1px solid ' + (isBot ? 'color-mix(in srgb, var(--mango) 40%, transparent)' : 'var(--rule)'),
+        fontWeight: 700,
+        color: 'var(--ink-soft)',
+        overflow: 'hidden',
+      }}
+    >
+      {isBot ? <ParrotMark size={30} /> : (handle[0] ?? '?').toUpperCase()}
+    </div>
+  );
 }
 
 export function formatCount(n: number): string {
