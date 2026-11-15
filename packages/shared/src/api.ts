@@ -147,6 +147,17 @@ export interface DecisionLogEntryDto {
   readonly jobId: string;
   readonly agentName: string;
   readonly decision: 'APPROVE' | 'DECLINE';
+  /**
+   * Whether this agent actually got the job.
+   *
+   * Several agents can approve the same job; only the first to win the atomic
+   * claim pays for it. Without this flag the log reads as though every
+   * approver dubbed the video, which is wrong and makes the P&L look
+   * inconsistent with the reasoning next to it.
+   */
+  readonly won: boolean;
+  /** The agent that actually claimed it, for context on a losing bid. */
+  readonly claimedByAgentName: string | null;
   readonly declineReason: string | null;
   /** One or two sentences a non-technical person can read. */
   readonly rationale: string;

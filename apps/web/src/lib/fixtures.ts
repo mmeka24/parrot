@@ -438,6 +438,8 @@ const decisions: readonly DecisionLogEntryDto[] = [
     jobId: heroDub.jobId,
     agentName: 'Scout',
     decision: 'APPROVE',
+    won: true,
+    claimedByAgentName: null,
     declineReason: null,
     rationale:
       'Estimated 2,000 Spanish views at a 12.5% unlock rate, so about 250 unlocks. Parrot keeps $0.008 of each $0.02 unlock, which is $2.00, and there is a 70% chance the dub passes checks. Against a $0.40 bill that is $1.00 of expected profit. Dubbing.',
@@ -464,6 +466,8 @@ const decisions: readonly DecisionLogEntryDto[] = [
     jobId: 'dub_ko_1f08',
     agentName: 'Scout',
     decision: 'DECLINE',
+    won: false,
+    claimedByAgentName: null,
     declineReason: 'LOW_EV',
     rationale:
       'Estimated only 180 Korean views, which is about 22 unlocks and $0.13 back after the quality discount. Dubbing it costs $0.55, so this one loses money. Passing for now.',
@@ -490,6 +494,8 @@ const decisions: readonly DecisionLogEntryDto[] = [
     jobId: qcRejectedDub.jobId,
     agentName: 'Magpie',
     decision: 'APPROVE',
+    won: true,
+    claimedByAgentName: null,
     declineReason: null,
     rationale:
       'Estimated 1,400 Japanese views at a 12.5% unlock rate, worth $1.40 before the quality discount, against a $0.60 bill. Worth a shot at $0.38 of expected profit. Dubbing.',
@@ -516,6 +522,8 @@ const decisions: readonly DecisionLogEntryDto[] = [
     jobId: ptDub.jobId,
     agentName: 'Owl',
     decision: 'APPROVE',
+    won: true,
+    claimedByAgentName: null,
     declineReason: null,
     rationale:
       'Portuguese clips from this creator have converted at 13.1% across six runs, so 900 views is about 118 unlocks and $0.94. The $0.40 bill leaves $0.26 of expected profit. Dubbing.',

@@ -21,6 +21,7 @@ import {
   type DemoStateDto,
   type FeedStatusDto,
   type TickerEntryDto,
+  type BotPostDto,
   micros,
 } from '@parrot/shared';
 import type { Store } from '../store/store.js';
@@ -29,6 +30,7 @@ import type { JobPipeline } from '../services/job-pipeline.js';
 import type { LearningService } from '../services/learning-service.js';
 import type { SeedService } from '../services/seed-service.js';
 import {
+  mediaUrl,
   accuracySeries,
   agentJobRow,
   agentSummary,
@@ -56,6 +58,18 @@ export interface RouteDeps {
   broadcast: (entry: TickerEntryDto) => void;
   /** Returns an SSE handler, supplied by the feed module. */
   sseHandler?: (req: Request, res: Response) => void;
+  /**
+   * Injects a mention and runs the REAL bot path end to end. The console uses
+   * this rather than a parallel fake, so what judges see on /console is the
+   * same code that would run against the live X API.
+   */
+  processMention?: (
+    text: string,
+    parentPostId?: string,
+    authorHandle?: string,
+  ) => Promise<string | null>;
+  /** Pushes a new bot post to connected dashboards. */
+  broadcastPost?: (post: BotPostDto) => void;
 }
 
 function sendError(res: Response, status: number, error: ApiErrorDto): void {
@@ -78,9 +92,28 @@ export function createApp(deps: RouteDeps): Express {
 
   app.use(express.json({ limit: '1mb' }));
 
-  app.use((_req, res, next) => {
-    // The web app runs on a different origin in development.
-    res.setHeader('Access-Control-Allow-Origin', getConfig().env.PUBLIC_WEB_URL);
+  // Serve rendered dubs. Without this the dub page 404s on its own media.
+  app.use(
+    '/media',
+    express.static(getConfig().env.MEDIA_STORAGE_DIR, {
+      fallthrough: true,
+      maxAge: '1h',
+    }),
+  );
+
+  app.use((req, res, next) => {
+    // The web app runs on a different origin in development, and not always on
+    // the configured port (a busy port bumps it). Outside production we accept
+    // any localhost origin, because pinning one port silently breaks the live
+    // ticker with a CORS error that looks like a backend outage.
+    const configured = getConfig().env.PUBLIC_WEB_URL;
+    const origin = req.headers.origin;
+    const allowLocalhost =
+      getConfig().env.NODE_ENV !== 'production' &&
+      typeof origin === 'string' &&
+      /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+    res.setHeader('Access-Control-Allow-Origin', allowLocalhost ? origin : configured);
+    res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Headers', 'content-type');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -199,7 +232,7 @@ export function createApp(deps: RouteDeps): Express {
       const refreshed = store.getJob(job.id);
       res.json({
         ok: true,
-        fullUrl: refreshed?.dubUrl ?? '',
+        fullUrl: mediaUrl(refreshed?.dubUrl ?? null) ?? '',
         viewerBalance: money(result.viewerBalance),
         receipt: dubPage(store, refreshed ?? job, viewerId).receipts[0] ?? null,
       });
@@ -345,6 +378,42 @@ export function createApp(deps: RouteDeps): Express {
       simulated: !getConfig().capabilities.xApi,
     };
     res.json(payload);
+  });
+
+  app.post('/api/bot/mention', async (req, res) => {
+    const text = String(req.body?.text ?? '').trim();
+    if (!text) {
+      return sendError(res, 400, {
+        ok: false,
+        code: 'BAD_REQUEST',
+        title: copy.errors.genericTitle,
+        detail: copy.errors.genericBody,
+      });
+    }
+    if (!deps.processMention) {
+      return sendError(res, 503, {
+        ok: false,
+        code: 'INTERNAL',
+        title: copy.errors.sourceUnavailableTitle,
+        detail: copy.errors.sourceUnavailableBody,
+      });
+    }
+
+    const before = new Set(store.botPosts.keys());
+    const jobId = await deps.processMention(
+      text,
+      req.body?.parentPostId as string | undefined,
+      req.body?.authorHandle as string | undefined,
+    );
+
+    // Return just what this mention produced: the post and Parrot's reply.
+    const fresh = store
+      .timeline(200)
+      .filter((p) => !before.has(p.id))
+      .map(botPostDto);
+    for (const post of fresh) deps.broadcastPost?.(post);
+
+    res.json({ ok: true, jobId, posts: fresh });
   });
 
   // -------------------------------------------------------------------------

@@ -101,9 +101,19 @@ export default async function AgentsPage() {
         subtitle={localCopy.dashboard.decisionsSubtitle}
       >
         <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: '0.9rem' }}>
-          {decisions.map((entry) => (
-            <DecisionCard key={entry.jobId + entry.decidedAt} entry={entry} />
-          ))}
+          {/*
+            Winners first, then a few losing bids for context. Every agent bids
+            on every job, so rendering all of them made this page ~16,000px
+            tall and buried the result under the runners-up.
+          */}
+          {[...decisions.filter((d) => d.won), ...decisions.filter((d) => !d.won)]
+            .slice(0, 8)
+            .map((entry) => (
+              <DecisionCard
+                key={`${entry.jobId}:${entry.agentName}:${entry.decidedAt}`}
+                entry={entry}
+              />
+            ))}
         </ul>
       </Panel>
 

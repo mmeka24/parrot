@@ -222,12 +222,19 @@ export class JobPipeline {
         // Record every agent's reasoning, winners and losers alike. The losing
         // bids are half the story on the dashboard.
         for (const bid of outcome.bids) {
+          const won = outcome.winner?.id === bid.agent.id;
           this.store.appendEvent({
             jobId: job.id,
             type: bid.approved ? 'APPROVED' : 'DECLINED',
             fromState: 'EVALUATING',
             toState: null,
-            payload: { decision: bid.decision as unknown as Record<string, unknown> },
+            payload: {
+              decision: bid.decision as unknown as Record<string, unknown>,
+              // Several agents can approve; only one wins the claim. Recording
+              // this is what stops the dashboard crediting a losing bidder.
+              won,
+              claimedByAgentName: outcome.winner?.name ?? null,
+            },
             txHash: null,
           });
         }

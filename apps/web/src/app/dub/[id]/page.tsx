@@ -23,14 +23,18 @@ export async function generateMetadata({
 
 export default async function DubPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { data } = await getDub(id);
+  const { data, live } = await getDub(id);
 
-  const others = sampleDubIds.filter((other) => other !== data.jobId).slice(0, 3);
+  // Only offer the sample dubs when we are running on fixtures. Against a live
+  // backend these ids do not exist, so showing them hands the viewer three
+  // links that 404.
+  const others = live ? [] : sampleDubIds.filter((other) => other !== data.jobId).slice(0, 3);
 
   return (
     <div className="stack" style={{ ['--stack' as string]: '1.5rem' }}>
       <DubView dub={data} />
 
+      {others.length > 0 ? (
       <section className="panel">
         <div className="panel-head">
           <h2 className="panel-title">{localCopy.dub.moreDubs}</h2>
@@ -43,6 +47,7 @@ export default async function DubPage({ params }: { params: Promise<{ id: string
           ))}
         </div>
       </section>
+      ) : null}
     </div>
   );
 }

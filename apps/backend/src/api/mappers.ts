@@ -56,6 +56,24 @@ import type {
 } from '../store/types.js';
 import { getConfig } from '../config.js';
 
+/**
+ * Turn a stored media path into something a browser can actually fetch.
+ *
+ * DubbingService writes a FILESYSTEM path (on Windows, with backslashes). Handing
+ * that to an <audio src> yields a 404 and a dub that cannot play - which is the
+ * one thing the viewer page exists to do. Everything is served from /media.
+ */
+export function mediaUrl(storedPath: string | null): string | null {
+  if (!storedPath) return null;
+  if (/^https?:\/\//i.test(storedPath)) return storedPath;
+  const base = getConfig().env.PUBLIC_BACKEND_URL.replace(/\/$/, '');
+  // Split on BOTH separators: these paths are written by Node on Windows, so
+  // they arrive with backslashes.
+  const file = storedPath.split(/[\\/]/).pop();
+  if (!file) return null;
+  return `${base}/media/${encodeURIComponent(file)}`;
+}
+
 export function money(amount: Micros, maxDecimals: 2 | 3 = 2): MoneyDto {
   return {
     micros: (amount as bigint).toString(),
@@ -182,9 +200,9 @@ export function dubPage(
     },
     sourceUrl: job.sourceUrl,
     durationS: job.durationS,
-    posterUrl: job.posterUrl,
-    previewUrl: job.previewUrl,
-    fullUrl: unlocked ? job.dubUrl : null,
+    posterUrl: mediaUrl(job.posterUrl),
+    previewUrl: mediaUrl(job.previewUrl),
+    fullUrl: unlocked ? mediaUrl(job.dubUrl) : null,
     previewSeconds: PREVIEW_SECONDS,
     price: money(UNLOCK_PRICE),
     unlocked,
@@ -266,7 +284,11 @@ export function decisionLog(store: Store, limit = 40): DecisionLogEntryDto[] {
 
   for (const event of [...store.events].reverse()) {
     if (event.type !== 'APPROVED' && event.type !== 'DECLINED') continue;
-    const payload = event.payload as { decision?: Record<string, unknown> } | null;
+    const payload = event.payload as {
+      decision?: Record<string, unknown>;
+      won?: boolean;
+      claimedByAgentName?: string | null;
+    } | null;
     const decision = payload?.decision as
       | {
           agentName: string;
@@ -288,8 +310,17 @@ export function decisionLog(store: Store, limit = 40): DecisionLogEntryDto[] {
       jobId: job.id,
       agentName: decision.agentName,
       decision: decision.decision,
+      won: payload?.won ?? decision.decision === 'APPROVE',
+      claimedByAgentName: payload?.claimedByAgentName ?? null,
       declineReason: decision.declineReason,
-      rationale: decision.rationale,
+      // An agent that approved but lost the race reasoned its way to "I would
+      // dub this" - which is true, and worth showing - but the log must not
+      // leave a reader thinking it did. The winner's name is appended rather
+      // than the reasoning being rewritten, because the reasoning is real.
+      rationale:
+        decision.decision === 'APPROVE' && payload?.won === false && payload?.claimedByAgentName
+          ? `${decision.rationale} (${payload.claimedByAgentName} claimed this one first.)`
+          : decision.rationale,
       math: {
         predictedViews: Number(decision.inputs.predictedViews ?? 0),
         conversionPercent: formatPpmPercent(ppm(Number(decision.inputs.conversionPpm ?? 0))),

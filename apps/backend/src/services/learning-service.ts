@@ -139,6 +139,16 @@ export class LearningService {
       if (!job || job.publishedAt === null) continue;
       if (job.publishedAt.getTime() > cutoff) continue;
 
+      // Do not resolve a prediction against an empty world.
+      //
+      // In demo mode the window is 60s, which can elapse before anyone has
+      // watched anything. Scoring that as "predicted 1,935, actual 0, 100%
+      // wrong" would be measuring our own demo timing, not the agent's
+      // judgement, and it makes a sound prediction look catastrophic. With no
+      // views AND no unlocks there is simply nothing to learn yet, so we wait.
+      const hasData = job.viewCount > 0 || this.store.unlocksForJob(job.id).length > 0;
+      if (!hasData) continue;
+
       const result = this.resolve(prediction.jobId);
       if (result) results.push(result);
     }
