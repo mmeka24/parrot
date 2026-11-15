@@ -1,0 +1,29 @@
+{
+  "name": "@parrot/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "db:push": "drizzle-kit push",
+    "db:seed": "tsx src/scripts/seed.ts",
+    "smoke:payments": "tsx src/scripts/smoke-payments.ts"
+  },
+  "dependencies": {
+    "@parrot/shared": "*",
+    "@circle-fin/x402-batching": "^4.0.0",
+    "@x402/core": "^2.3.0",
+    "@elevenlabs/elevenlabs-js": "^2.78.0",
+    "drizzle-orm": "^0.38.3",
+    "express": "^4.21.2",
+    "postgres": "^3.4.5",
+    "viem": "^2.57.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "drizzle-kit": "^0.30.1"
+  }
+}
