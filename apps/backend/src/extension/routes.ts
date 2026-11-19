@@ -1,20 +1,25 @@
 /**
  * What the browser extension talks to: /api/extension/*.
  *
- * Two read-only endpoints. The extension is UI: it finds post ids in the page,
- * asks here what Parrot knows about them, and draws the answer. It cannot
- * create a job. A dub is requested the way it always was - by the creator
- * replying under their own post - and the extension only types that reply into
- * the page's own composer for them.
+ * TWO SURFACES, TWO TRUST LEVELS - kept apart on purpose.
  *
- * That shape is deliberate. Anything read out of a web page can be forged by
- * the person looking at it, so nothing the extension could send is trusted:
- * authorship, engagement and the video are resolved here, through the XAdapter,
- * and an inflated like count in someone's DOM can never talk an agent into
- * paying for a dub.
+ * On the stand-in (Chirp), the extension is read-only UI. It sends post ids,
+ * Parrot resolves everything through its XAdapter, and a dub is requested the
+ * way it always was: the creator's reply, which the extension only types for
+ * them. Nothing read off the page is trusted.
+ *
+ * On real x.com there is no X API (it bills per call; see bot/x-adapter.ts), so
+ * there is nothing to resolve against and no bot reading replies. The page is
+ * the only source, so the extension reports what it reads (/observe) and asks
+ * directly (/request). That data is UNVERIFIED - the person viewing a page can
+ * edit it - and it is labelled `source: 'page'` all the way to the strip. Two
+ * things still bound the damage a forged page can do: the agents' own spend
+ * caps (per job, per day), and the fact that every number feeds the same EV
+ * model, which still has to clear its margin.
  */
 
 import type { Express } from 'express';
+import { z } from 'zod';
 import {
   DEFAULT_SPLIT_CREATOR_BPS,
   SUPPORTED_LANGUAGES,
@@ -22,12 +27,15 @@ import {
   isPublished,
   languageName,
   mentionsHandle,
+  type ApiErrorDto,
   type ExtensionConfigDto,
+  type ExtensionDubAcceptedDto,
   type ExtensionDubDto,
   type ExtensionPostStatusDto,
   type ExtensionStatusResponseDto,
 } from '@parrot/shared';
 import type { Store } from '../store/store.js';
+import type { ObservedPost } from '../store/types.js';
 import type { XAdapter } from '../bot/x-adapter.js';
 import { money, statusLabel } from '../api/mappers.js';
 import { getConfig } from '../config.js';
@@ -36,6 +44,49 @@ export interface ExtensionDeps {
   store: Store;
   adapter: XAdapter;
   botHandle: string;
+  /**
+   * Run the real pipeline for a page-read x.com post. Resolves with what Parrot
+   * would have replied. Omitted where x.com requests are not wanted (tests).
+   */
+  dubObservedPost?: (post: ObservedPost, targetLang: string) => Promise<string>;
+}
+
+const handleSchema = z
+  .string()
+  .regex(/^@?[A-Za-z0-9_]{1,15}$/)
+  .transform((h) => h.replace(/^@/, '').toLowerCase());
+
+const countSchema = z.number().int().nonnegative().max(10_000_000_000);
+
+const observedSchema = z.object({
+  // Real x.com ids are numeric snowflakes.
+  postId: z.string().regex(/^[0-9]{1,25}$/),
+  authorHandle: handleSchema,
+  authorDisplayName: z.string().max(100),
+  text: z.string().max(2_000),
+  metrics: z.object({
+    likes: countSchema,
+    replies: countSchema,
+    reposts: countSchema,
+    views: countSchema.nullable(),
+  }),
+  durationS: z.number().positive().max(4 * 3600).nullable(),
+  createdAt: z.string().datetime().nullable(),
+});
+
+const observeSchema = z.object({ posts: z.array(observedSchema).max(50) });
+
+const requestSchema = z.object({
+  postId: z.string().regex(/^[0-9]{1,25}$/),
+  languageCode: z.string(),
+  requesterHandle: handleSchema,
+});
+
+/** Observed posts kept at most; the oldest are dropped past this. */
+const MAX_OBSERVED = 5_000;
+
+function badRequest(title: string, detail: string): ApiErrorDto {
+  return { ok: false, code: 'BAD_REQUEST', title, detail };
 }
 
 /** How many post ids one status call may carry. A timeline page, with room. */
@@ -77,6 +128,104 @@ export function registerExtensionRoutes(app: Express, deps: ExtensionDeps): void
     res.json(payload);
   });
 
+  // ---- x.com only -----------------------------------------------------------
+
+  app.post('/api/extension/observe', (req, res) => {
+    const parsed = observeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json(badRequest('That could not be read', 'The page sent something unexpected.'));
+    }
+    const now = new Date();
+    for (const post of parsed.data.posts) {
+      const previous = store.observedPosts.get(post.postId);
+      store.observedPosts.set(post.postId, {
+        postId: post.postId,
+        authorHandle: post.authorHandle,
+        authorDisplayName: post.authorDisplayName,
+        text: post.text,
+        metrics: post.metrics,
+        // A length read once stays known when a later read misses it.
+        durationS: post.durationS ?? previous?.durationS ?? null,
+        createdAt: post.createdAt ? new Date(post.createdAt) : (previous?.createdAt ?? null),
+        observedAt: now,
+        pendingSince: previous?.pendingSince ?? null,
+        lastAnswer: previous?.lastAnswer ?? null,
+      });
+    }
+    // Bounded: a long scroll session must not grow memory without limit.
+    while (store.observedPosts.size > MAX_OBSERVED) {
+      const oldest = store.observedPosts.keys().next().value;
+      if (oldest === undefined) break;
+      store.observedPosts.delete(oldest);
+    }
+    res.json({ ok: true, stored: parsed.data.posts.length });
+  });
+
+  app.post('/api/extension/request', (req, res) => {
+    if (!deps.dubObservedPost) {
+      return res.status(404).json(badRequest('Not available here', 'This server does not take requests from X.'));
+    }
+    const parsed = requestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json(badRequest('That could not be read', 'Pick a language and try again.'));
+    }
+    const { postId, languageCode, requesterHandle } = parsed.data;
+    const post = store.observedPosts.get(postId);
+    if (!post) {
+      return res
+        .status(404)
+        .json(badRequest('Parrot has not seen that post', 'Scroll back to it and try again.'));
+    }
+    if (post.durationS === null) {
+      // Without a length the cost cannot be estimated, and the agents would be
+      // pricing a guess.
+      return res
+        .status(400)
+        .json(badRequest('Parrot could not tell how long the video is', 'Play it for a moment and try again.'));
+    }
+    // Authorship, on the only evidence there is: the page. Unverified, and
+    // labelled so - but it still stops the honest mistake of dubbing someone
+    // else's video and routing its earnings to them.
+    if (requesterHandle !== post.authorHandle) {
+      return res.status(403).json({
+        ok: false,
+        code: 'BAD_REQUEST',
+        title: 'Not your video',
+        detail: 'Only the person who posted the video can ask for a dub.',
+      } satisfies ApiErrorDto);
+    }
+    const language = SUPPORTED_LANGUAGES.find((l) => l.code === languageCode && l.code !== 'en');
+    if (!language) {
+      return res.status(400).json(badRequest('Parrot does not speak that one yet', 'Pick another language.'));
+    }
+    if (post.pendingSince && Date.now() - post.pendingSince.getTime() < PENDING_WINDOW_MS) {
+      return res
+        .status(409)
+        .json(badRequest('Parrot is already on it', 'Wait for the answer to the last request.'));
+    }
+
+    post.pendingSince = new Date();
+    const run = deps.dubObservedPost;
+    void run(post, language.code)
+      .then((answer) => {
+        post.lastAnswer = { text: answer, at: new Date() };
+      })
+      .catch((error: unknown) => {
+        console.error('[extension] x.com request failed', error);
+        post.lastAnswer = {
+          text: 'Something went wrong on my side. Nothing was charged to you - try again shortly.',
+          at: new Date(),
+        };
+      })
+      .finally(() => {
+        post.pendingSince = null;
+      });
+
+    // Answer at once; the strip shows progress by polling the post's status.
+    const payload: ExtensionDubAcceptedDto = { ok: true };
+    res.status(202).json(payload);
+  });
+
   async function statusFor(postId: string): Promise<ExtensionPostStatusDto> {
     const webUrl = getConfig().env.PUBLIC_WEB_URL.replace(/\/$/, '');
 
@@ -104,6 +253,26 @@ export function registerExtensionRoutes(app: Express, deps: ExtensionDeps): void
       source = await adapter.getPost(postId);
     } catch {
       source = null;
+    }
+
+    // A real x.com post: all Parrot has is what a page told it.
+    const observed = source === null ? store.observedPosts.get(postId) : undefined;
+    if (observed) {
+      const recent =
+        observed.pendingSince !== null &&
+        Date.now() - observed.pendingSince.getTime() < PENDING_WINDOW_MS;
+      return {
+        postId,
+        known: true,
+        hasVideo: true,
+        authorHandle: observed.authorHandle,
+        dubs,
+        pending: recent,
+        lastReply: observed.lastAnswer
+          ? { text: observed.lastAnswer.text, at: observed.lastAnswer.at.toISOString() }
+          : null,
+        source: 'page',
+      };
     }
 
     // Requests and answers under the post, from the bot's own timeline record.
@@ -135,6 +304,7 @@ export function registerExtensionRoutes(app: Express, deps: ExtensionDeps): void
       dubs,
       pending,
       lastReply: last ? { text: last.text, at: last.createdAt.toISOString() } : null,
+      source: 'server',
     };
   }
 }

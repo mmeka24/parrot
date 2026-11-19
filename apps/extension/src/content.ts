@@ -24,6 +24,7 @@ import { X_TESTID, parseStatusHref, xSelector } from '@parrot/shared/x-dom';
 import type {
   ExtensionConfigDto,
   ExtensionDubDto,
+  ExtensionObservedPostDto,
   ExtensionPostStatusDto,
 } from '@parrot/shared';
 import { ask } from './messages';
@@ -31,6 +32,14 @@ import { el, parrotMark, waitFor } from './dom';
 import { STRIP_CSS } from './styles';
 
 const t = copy.extension;
+
+/**
+ * Real x.com, as opposed to the local stand-in. On x.com there is no bot
+ * reading replies (no X API), and a reply would publicly tag whoever owns the
+ * bot's handle there - so requests go straight to Parrot instead, carrying what
+ * the page shows about the post.
+ */
+const ON_X = /(^|\.)(x|twitter)\.com$/.test(location.hostname);
 
 /** The marker on our own element, so a rescan finds it rather than adding a second. */
 const HOST_ATTR = 'data-parrot-strip';
@@ -93,6 +102,73 @@ function permalinkOf(article: HTMLElement): string | null {
   return null;
 }
 
+/** The first whole number in an aria-label like "1,234 Likes. Like". */
+function countIn(label: string | null | undefined): number | null {
+  const match = label?.match(/\d[\d,.\s]*/);
+  if (!match) return null;
+  const value = Number(match[0].replace(/[^\d]/g, ''));
+  return Number.isFinite(value) ? value : null;
+}
+
+/** "1:05" -> 65. */
+function clockToSeconds(text: string): number | null {
+  const match = text.match(/(\d+):(\d{2})(?::(\d{2}))?/);
+  if (!match) return null;
+  const parts = match.slice(1).filter((p): p is string => p !== undefined).map(Number);
+  return parts.reduce((total, part) => total * 60 + part, 0) || null;
+}
+
+/**
+ * What the page shows about a video post, for Parrot to price. x.com only.
+ * Every number comes from the page's own accessibility labels, which carry the
+ * exact counts rather than the rounded "5.4K" on screen.
+ */
+function readPost(article: HTMLElement, postId: string): ExtensionObservedPostDto | null {
+  const player = article.querySelector(xSelector(X_TESTID.videoPlayer));
+  if (!player) return null;
+
+  const anchor = article.querySelector('a time')?.closest('a');
+  const parsed = anchor ? parseStatusHref(anchor.getAttribute('href') ?? '') : null;
+  if (!parsed || parsed.postId !== postId) return null;
+
+  const label = (id: string): string | null =>
+    article.querySelector(xSelector(id as Parameters<typeof xSelector>[0]))?.getAttribute('aria-label') ?? null;
+
+  const video = player.querySelector('video');
+  let durationS =
+    video && Number.isFinite(video.duration) && video.duration > 0 ? video.duration : null;
+  if (durationS === null) {
+    // Before the video loads, its length is still printed on the poster, as
+    // "0:30" - or as "0:12 / 0:30" once it is playing, where the last one is
+    // the total.
+    const clocks = (player.textContent ?? '').match(/\d+:\d{2}(?::\d{2})?/g);
+    const last = clocks?.[clocks.length - 1];
+    durationS = last ? clockToSeconds(last) : null;
+  }
+
+  const userName = article.querySelector(xSelector(X_TESTID.userName));
+  const displayName = userName?.querySelector('span')?.textContent?.trim() ?? parsed.handle;
+  const views = countIn(
+    article.querySelector('a[href$="/analytics"]')?.getAttribute('aria-label'),
+  );
+  const time = article.querySelector('time')?.getAttribute('datetime') ?? null;
+
+  return {
+    postId,
+    authorHandle: parsed.handle,
+    authorDisplayName: displayName.slice(0, 100),
+    text: (article.querySelector(xSelector(X_TESTID.tweetText))?.textContent ?? '').slice(0, 2_000),
+    metrics: {
+      replies: countIn(label(X_TESTID.reply)) ?? 0,
+      reposts: countIn(label(X_TESTID.retweet)) ?? 0,
+      likes: countIn(label(X_TESTID.like) ?? label(X_TESTID.unlike)) ?? 0,
+      views,
+    },
+    durationS: durationS === null ? null : Math.round(durationS * 10) / 10,
+    createdAt: time && !Number.isNaN(Date.parse(time)) ? new Date(time).toISOString() : null,
+  };
+}
+
 /** The signed-in handle, from the account chip in the side nav. */
 function currentHandle(): string | null {
   const chip = document.querySelector(xSelector(X_TESTID.accountSwitcher));
@@ -122,6 +198,14 @@ async function refresh(): Promise<void> {
     if (!config) {
       const response = await ask({ type: 'config' });
       if (response.ok) config = response.data;
+    }
+    if (config && ON_X) {
+      // Only video posts: they are the only ones Parrot can do anything with,
+      // and nothing else from the timeline needs to leave the page.
+      const seen = posts
+        .map((p) => readPost(p.article, p.postId))
+        .filter((p): p is ExtensionObservedPostDto => p !== null);
+      if (seen.length > 0) await ask({ type: 'observe', posts: seen });
     }
     if (config) {
       const ids = [...new Set(posts.map((p) => p.postId))];
@@ -323,7 +407,7 @@ function languageMenu(
     const item = el('button', { type: 'button', class: 'lang', role: 'menuitem' }, [
       language.englishName,
     ]);
-    item.addEventListener('click', () => void requestDub(article, postId, language.englishName, state));
+    item.addEventListener('click', () => void requestDub(article, postId, language, state));
     langs.append(item);
   }
   menu.append(langs);
@@ -332,6 +416,7 @@ function languageMenu(
       fill(t.menuNote, { creatorPercent: config?.creatorPercent ?? 60 }),
     ]),
   );
+  if (status.source === 'page') menu.append(el('p', { class: 'note' }, [t.pageSourceNote]));
   menu.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       state.menuOpen = false;
@@ -348,20 +433,35 @@ function languageMenu(
 async function requestDub(
   article: HTMLElement,
   postId: string,
-  languageName: string,
+  language: { readonly code: string; readonly englishName: string },
   state: LocalState,
 ): Promise<void> {
   if (!config) return;
-  const request = fill(config.requestTemplate, {
-    handle: config.botHandle,
-    language: languageName,
-  });
 
   state.menuOpen = false;
   state.busy = true;
   state.message = null;
   drawAll();
 
+  if (ON_X) {
+    // Straight to Parrot: see ON_X. The server re-checks authorship against
+    // what it was told about the post, and prices it like any other request.
+    const response = await ask({
+      type: 'request',
+      body: { postId, languageCode: language.code, requesterHandle: currentHandle() ?? '' },
+    });
+    state.busy = false;
+    if (response.ok) state.sentAt = Date.now();
+    else state.message = { text: fill(t.requestFailed, { detail: response.error }), error: true };
+    drawAll();
+    scheduleSoon();
+    return;
+  }
+
+  const request = fill(config.requestTemplate, {
+    handle: config.botHandle,
+    language: language.englishName,
+  });
   const sent = await replyUnder(article, request);
 
   state.busy = false;

@@ -7,11 +7,18 @@
  * runs under the extension's own origin and its host permissions instead.
  */
 
-import type { ExtensionConfigDto, ExtensionStatusResponseDto } from '@parrot/shared';
+import type {
+  ExtensionConfigDto,
+  ExtensionDubRequestDto,
+  ExtensionObservedPostDto,
+  ExtensionStatusResponseDto,
+} from '@parrot/shared';
 
 export type Request =
   | { readonly type: 'config' }
   | { readonly type: 'posts'; readonly ids: readonly string[] }
+  | { readonly type: 'observe'; readonly posts: readonly ExtensionObservedPostDto[] }
+  | { readonly type: 'request'; readonly body: ExtensionDubRequestDto }
   | { readonly type: 'getServer' }
   | { readonly type: 'setServer'; readonly server: string };
 
@@ -22,9 +29,17 @@ export interface ResponseMap {
   posts: ExtensionStatusResponseDto;
   getServer: string;
   setServer: string;
+  observe: unknown;
+  request: unknown;
 }
 
-export const DEFAULT_SERVER = 'http://localhost:8787';
+declare const __PARROT_SERVER__: string | undefined;
+
+/** Baked in at build time (PARROT_SERVER=...), so a shared build works as-is. */
+export const DEFAULT_SERVER =
+  typeof __PARROT_SERVER__ === 'string' && __PARROT_SERVER__ !== ''
+    ? __PARROT_SERVER__
+    : 'http://localhost:8787';
 
 /** Ask the background worker. Never throws: a failure comes back as `ok: false`. */
 export async function ask<K extends Request['type']>(

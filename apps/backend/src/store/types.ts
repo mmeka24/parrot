@@ -228,6 +228,29 @@ export interface BotPost {
   posted: boolean;
 }
 
+/**
+ * A post on real x.com, as the browser extension read it off the page.
+ *
+ * There is no X API behind this (see bot/x-adapter.ts), so the page is the
+ * only source - and every field here is UNVERIFIED: whoever is looking at the
+ * page can edit it. It is labelled as such wherever it is shown.
+ */
+export interface ObservedPost {
+  postId: string;
+  authorHandle: string;
+  authorDisplayName: string;
+  text: string;
+  metrics: { likes: number; replies: number; reposts: number; views: number | null };
+  /** Null when the page did not reveal the length. */
+  durationS: number | null;
+  createdAt: Date | null;
+  observedAt: Date;
+  /** Set while a dub request for this post is being worked on. */
+  pendingSince: Date | null;
+  /** Parrot's last answer, worded as the bot would have replied. */
+  lastAnswer: { text: string; at: Date } | null;
+}
+
 export interface ProcessedMention {
   mentionId: string;
   jobId: string | null;
