@@ -154,6 +154,7 @@ export class MockXAdapter implements XAdapter {
       postId: post.id,
       authorId: post.authorXUserId,
       authorHandle: post.authorHandle,
+      authorDisplayName: post.authorDisplayName || user?.displayName || undefined,
       authorFollowers: user?.followers ?? 0,
       text: post.text,
       createdAt: post.createdAt,

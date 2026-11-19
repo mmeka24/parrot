@@ -156,8 +156,11 @@ export class LearningService {
     return results;
   }
 
-  /** Mean absolute percentage error across everything resolved so far. */
-  accuracy(): number | null {
+  /**
+   * Mean absolute percentage error of every resolved prediction: how far off
+   * the view forecasts were. LOWER is better; 0 is perfect. Not an accuracy.
+   */
+  predictionErrorPercent(): number | null {
     const samples = this.store
       .resolvedPredictions()
       .map((p) => ({ predicted: p.predictedViews, actual: p.actualViews ?? 0 }));

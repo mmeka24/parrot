@@ -371,6 +371,7 @@ export class XApiAdapter implements XAdapter {
       postId: tweet.id,
       authorId: tweet.author_id ?? '',
       authorHandle: author?.username ?? tweet.author_id ?? '',
+      authorDisplayName: author?.name || undefined,
       authorFollowers: author?.public_metrics?.followers_count ?? 0,
       text: tweet.text,
       createdAt: tweet.created_at ?? new Date(this.now()).toISOString(),

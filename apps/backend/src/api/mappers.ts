@@ -77,8 +77,23 @@ export function mediaUrl(storedPath: string | null): string | null {
 export function money(amount: Micros, maxDecimals: 2 | 3 = 2): MoneyDto {
   return {
     micros: (amount as bigint).toString(),
-    display: formatUsd(amount, { maxDecimals }),
+    display: formatUsd(amount, { maxDecimals: displayDecimals(amount, maxDecimals) }),
   };
+}
+
+/** Below this, a third decimal carries real information ("$0.008"). */
+const SUB_CENT_DISPLAY_LIMIT = 100_000n; // $0.10 in micros
+
+/**
+ * Sub-cent precision only where it matters. An agent's 40% of one unlock is
+ * $0.008 and must not read as $0.00, but a running total like "$1.032" just
+ * looks like a typo, so anything from 10 cents up is shown in whole cents.
+ */
+function displayDecimals(amount: Micros, requested: 2 | 3): 2 | 3 {
+  if (requested === 2) return 2;
+  const raw = amount as bigint;
+  const abs = raw < 0n ? -raw : raw;
+  return abs < SUB_CENT_DISPLAY_LIMIT ? 3 : 2;
 }
 
 /** Plain-language status label. Never leaks a state machine name to a user. */
@@ -126,7 +141,7 @@ export function settlementReceipt(settlement: Settlement, store: Store): Receipt
     agent_share: {
       title: copy.receipt.parrotSharePaid,
       detail: fill(copy.receipt.parrotSharePaidDetail, {
-        amount: formatUsd(settlement.amount, { maxDecimals: 3 }),
+        amount: formatUsd(settlement.amount, { maxDecimals: displayDecimals(settlement.amount, 3) }),
       }),
     },
     dub_cost: {
@@ -429,6 +444,26 @@ export function accuracySeries(store: Store): AccuracyPointDto[] {
   }));
 }
 
+/**
+ * The feed line for a settlement. Shares of an unlock are BANKED into the
+ * recipient's balance; only a claimed creator payout is "paid out". Saying
+ * "paid to @maria" for a share made her dashboard ("Already paid out: $0.00")
+ * look wrong when it was right.
+ */
+function tickerText(settlement: Settlement, name: string): string {
+  const amount = formatUsd(settlement.amount, {
+    maxDecimals: displayDecimals(settlement.amount, 3),
+  });
+  switch (settlement.kind) {
+    case 'creator_payout':
+      return fill(copy.ticker.paidOut, { amount, name });
+    case 'dub_cost':
+      return fill(copy.ticker.dubCost, { amount });
+    default:
+      return fill(copy.ticker.shareBanked, { amount, name });
+  }
+}
+
 export function tickerFromSettlement(settlement: Settlement, store: Store): TickerEntryDto {
   const account = store.getAccount(settlement.toAccountId);
   const verifiable =
@@ -436,7 +471,7 @@ export function tickerFromSettlement(settlement: Settlement, store: Store): Tick
   return {
     id: settlement.id,
     kind: 'settlement',
-    text: `${formatUsd(settlement.amount, { maxDecimals: 3 })} paid to ${account?.label ?? 'an account'}`,
+    text: tickerText(settlement, account?.label ?? copy.ticker.someone),
     amount: money(settlement.amount, 3),
     at: settlement.createdAt.toISOString(),
     verifyUrl: verifiable ? txUrl(settlement.txHash as string) : null,

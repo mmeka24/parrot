@@ -305,6 +305,13 @@ export interface InjectMentionRequestDto {
   readonly parentPostId?: string;
 }
 
+/** POST /api/bot/mention: the mention and Parrot's reply, newest first. */
+export interface InjectMentionResponseDto {
+  readonly ok: true;
+  readonly jobId: string | null;
+  readonly posts: readonly BotPostDto[];
+}
+
 // ---------------------------------------------------------------------------
 // The local X stand-in (apps/x-clone)  -  /api/x/*
 //

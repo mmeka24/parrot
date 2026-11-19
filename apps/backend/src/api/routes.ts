@@ -18,6 +18,7 @@ import {
   type ApiErrorDto,
   type AgentDashboardDto,
   type BotConsoleDto,
+  type InjectMentionResponseDto,
   type DemoStateDto,
   type FeedStatusDto,
   type TickerEntryDto,
@@ -428,7 +429,8 @@ export function createApp(deps: RouteDeps): Express {
       .map(botPostDto);
     for (const post of fresh) deps.broadcastPost?.(post);
 
-    res.json({ ok: true, jobId, posts: fresh });
+    const payload: InjectMentionResponseDto = { ok: true, jobId, posts: fresh };
+    res.json(payload);
   });
 
   // -------------------------------------------------------------------------
@@ -494,7 +496,13 @@ export function createApp(deps: RouteDeps): Express {
         if (result) results.push(result);
       }
     }
-    res.json({ ok: true, resolved: results.length, accuracyPercent: learning.accuracy() });
+    // Mean absolute percentage error: lower is better. Rounded for display.
+    const error = learning.predictionErrorPercent();
+    res.json({
+      ok: true,
+      resolved: results.length,
+      predictionErrorPercent: error === null ? null : Math.round(error * 10) / 10,
+    });
   });
 
   // -------------------------------------------------------------------------

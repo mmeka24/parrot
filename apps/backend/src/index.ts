@@ -17,7 +17,7 @@ import {
   type QcReport,
   type Category,
 } from '@parrot/shared';
-import { getConfig } from './config.js';
+import { getConfig, loadDotEnv } from './config.js';
 import { getStore } from './store/store.js';
 import { PaymentService } from './services/payment-service.js';
 import { DecisionService } from './services/decision-service.js';
@@ -159,6 +159,7 @@ function categorise(text: string): Category {
 }
 
 async function main(): Promise<void> {
+  loadDotEnv();
   const config = getConfig();
   const store = getStore();
 
@@ -272,7 +273,7 @@ async function main(): Promise<void> {
         return store.createCreator({
           xUserId: sourcePost.authorId,
           handle: sourcePost.authorHandle,
-          displayName: sourcePost.authorHandle,
+          displayName: sourcePost.authorDisplayName ?? sourcePost.authorHandle,
           accountId: account.id,
           followers: sourcePost.authorFollowers,
           claimed: false,

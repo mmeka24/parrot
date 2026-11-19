@@ -17,6 +17,7 @@ import type {
   DemoStateDto,
   DubPageDto,
   InjectMentionRequestDto,
+  InjectMentionResponseDto,
   ReceiptDto,
   SystemStatusDto,
   UnlockResponseDto,
@@ -171,12 +172,14 @@ export function getBotConsole(): Promise<Sourced<BotConsoleDto>> {
   return getOr<BotConsoleDto>('/api/bot', () => fixtures.botConsole);
 }
 
-export async function injectMention(body: InjectMentionRequestDto): Promise<BotPostDto[] | null> {
-  const live = await request<BotPostDto[]>('/api/bot/mention', {
+export async function injectMention(
+  body: InjectMentionRequestDto,
+): Promise<readonly BotPostDto[] | null> {
+  const live = await request<InjectMentionResponseDto>('/api/bot/mention', {
     method: 'POST',
     body: JSON.stringify(body),
   });
-  return live;
+  return live?.posts ?? null;
 }
 
 // ---------------------------------------------------------------------------

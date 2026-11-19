@@ -301,12 +301,15 @@ one that succeeded.
 
 ```bash
 git clone <this repo> && cd ubc
-npm install
+npm install              # needs Node 20.19+ (Tailwind 4 requires it)
 cp .env.example .env     # works as-is; no credentials required
 
-npm run dev:backend      # http://localhost:8787
-npm run dev:web          # http://localhost:3000
+npm run dev:backend      # http://localhost:8787 (reads the root .env itself)
+npm run dev:web          # http://localhost:3100
 ```
+
+The web app talks to the local backend via `apps/web/.env.development`. If the
+backend is down, every page falls back to built-in sample data.
 
 `.env.example` documents every variable. To make the money real, fund wallets at
 `faucet.circle.com` and fill in the key fields; the app picks up each capability as its

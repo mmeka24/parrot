@@ -183,6 +183,16 @@ export const copy = {
     verifyHint: 'Opens a public record of this payment.',
   },
 
+  /** One line per money movement in the live feed on the P&L page. */
+  ticker: {
+    /** A share of unlock money moved into someone's balance - not a payout. */
+    shareBanked: '{amount} banked for {name}',
+    /** Money actually sent out to a creator who claimed it. */
+    paidOut: '{amount} paid out to {name}',
+    dubCost: 'Parrot spent {amount} on a dub',
+    someone: 'an account',
+  },
+
   errors: {
     genericTitle: 'That did not work',
     genericBody: 'Give it another try. If it keeps happening, it is on us, not you.',
