@@ -23,7 +23,7 @@
 
 import { createHash } from 'node:crypto';
 import { readFile, writeFile, mkdir, copyFile, stat } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   ELEVENLABS_MAX_CONCURRENT_DUBS,
@@ -201,6 +201,29 @@ export interface DubbingServiceDeps {
   readonly requestTimeoutMs?: number;
 }
 
+/**
+ * Media types for an uploaded source file, by extension. The provider rejects
+ * an upload labelled application/octet-stream with HTTP 400
+ * (invalid_file_type) - found by the first real call, 2026-11-19 - so every
+ * upload must say what it is.
+ */
+const UPLOAD_MEDIA_TYPES: Record<string, string> = {
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.mkv': 'video/x-matroska',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.m4a': 'audio/mp4',
+  '.ogg': 'audio/ogg',
+  '.flac': 'audio/flac',
+};
+
+/** The media type to upload a file as, or null when it is not one we send. */
+export function uploadMediaType(path: string): string | null {
+  return UPLOAD_MEDIA_TYPES[extname(path).toLowerCase()] ?? null;
+}
+
 /** Every simulated provider job id starts with this. See isLiveJob(). */
 export const SIMULATED_JOB_PREFIX = 'sim_dub_';
 
@@ -334,12 +357,16 @@ export class DubbingService {
     if (input.sourceUrl !== undefined) {
       form.set('source_url', input.sourceUrl);
     } else if (input.filePath !== undefined) {
+      const type = uploadMediaType(input.filePath);
+      if (type === null) {
+        // Refuse before spending a request the provider is certain to reject.
+        throw new DubbingError(
+          'BAD_INPUT',
+          `cannot send ${basename(input.filePath)}: not a video or audio format the provider takes`,
+        );
+      }
       const bytes = await readFile(input.filePath);
-      form.set(
-        'file',
-        new Blob([new Uint8Array(bytes)], { type: 'application/octet-stream' }),
-        basename(input.filePath),
-      );
+      form.set('file', new Blob([new Uint8Array(bytes)], { type }), basename(input.filePath));
     }
 
     const res = await this.request('/v1/dubbing', { method: 'POST', body: form });

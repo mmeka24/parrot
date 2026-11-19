@@ -74,7 +74,8 @@ const observedSchema = z.object({
   createdAt: z.string().datetime().nullable(),
 });
 
-const observeSchema = z.object({ posts: z.array(observedSchema).max(50) });
+/** Shape only; each post is validated on its own (see /observe). */
+const observeSchema = z.object({ posts: z.array(z.unknown()).max(50) });
 
 const requestSchema = z.object({
   postId: z.string().regex(/^[0-9]{1,25}$/),
@@ -136,7 +137,13 @@ export function registerExtensionRoutes(app: Express, deps: ExtensionDeps): void
       return res.status(400).json(badRequest('That could not be read', 'The page sent something unexpected.'));
     }
     const now = new Date();
-    for (const post of parsed.data.posts) {
+    // Each post on its own: one odd post on a page (an ad, a missing count)
+    // must not stop Parrot seeing the rest of the timeline.
+    const valid = parsed.data.posts
+      .map((raw) => observedSchema.safeParse(raw))
+      .filter((r) => r.success)
+      .map((r) => r.data);
+    for (const post of valid) {
       const previous = store.observedPosts.get(post.postId);
       store.observedPosts.set(post.postId, {
         postId: post.postId,
@@ -158,7 +165,7 @@ export function registerExtensionRoutes(app: Express, deps: ExtensionDeps): void
       if (oldest === undefined) break;
       store.observedPosts.delete(oldest);
     }
-    res.json({ ok: true, stored: parsed.data.posts.length });
+    res.json({ ok: true, stored: valid.length, rejected: parsed.data.posts.length - valid.length });
   });
 
   app.post('/api/extension/request', (req, res) => {

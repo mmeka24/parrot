@@ -208,12 +208,17 @@ describe('real x.com posts, read off the page', () => {
     });
   });
 
-  it('rejects malformed page data rather than storing it', async () => {
-    const bad = { ...seen, metrics: { ...seen.metrics, likes: -5 } };
-    expect((await post('/api/extension/observe', { posts: [bad] })).status).toBe(400);
+  it('drops malformed posts one by one, keeping the good ones in the same batch', async () => {
+    const bad = { ...seen, postId: '111', metrics: { ...seen.metrics, likes: -5 } };
     const notSnowflake = { ...seen, postId: 'mock-post-1' };
-    expect((await post('/api/extension/observe', { posts: [notSnowflake] })).status).toBe(400);
-    expect(store.observedPosts.size).toBe(0);
+    const res = await post<{ stored: number; rejected: number }>('/api/extension/observe', {
+      posts: [bad, notSnowflake, seen],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ stored: 1, rejected: 2 });
+    expect([...store.observedPosts.keys()]).toEqual([seen.postId]);
+    // Not even a list: the request itself is malformed.
+    expect((await post('/api/extension/observe', { posts: 'nope' })).status).toBe(400);
   });
 
   it('only takes a request from the handle that posted the video', async () => {

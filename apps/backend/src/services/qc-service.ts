@@ -30,6 +30,7 @@ import {
   QC_LOUDNESS_RANGE_LUFS,
   elevenLabsSttResponseSchema,
   languageName,
+  normalizeLanguageCode,
   type QcReport,
 } from '@parrot/shared';
 import { getConfig } from '../config.js';
@@ -193,8 +194,9 @@ export class QcService {
       );
     }
 
-    const heard = stt.language_code.toLowerCase().split(/[-_]/)[0] ?? '';
-    const want = input.targetLang.toLowerCase().split(/[-_]/)[0] ?? '';
+    // Both sides in one form: the speech service answers "spa", jobs say "es".
+    const heard = normalizeLanguageCode(stt.language_code);
+    const want = normalizeLanguageCode(input.targetLang);
     const confidence = stt.language_probability;
 
     if (heard !== want) {

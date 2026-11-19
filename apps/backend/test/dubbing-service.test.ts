@@ -365,3 +365,15 @@ describe('DubbingService - live mode (faked network)', () => {
     expect(svc.inFlight).toBe(0);
   });
 });
+
+describe('upload media types', () => {
+  it('labels every source format with a real media type, never octet-stream', async () => {
+    const { uploadMediaType } = await import('../src/services/dubbing-service.js');
+    expect(uploadMediaType('/m/src_1.webm')).toBe('video/webm');
+    expect(uploadMediaType('C:\m\src_1.MP4')).toBe('video/mp4');
+    expect(uploadMediaType('/m/src_1.mov')).toBe('video/quicktime');
+    expect(uploadMediaType('/m/clip.wav')).toBe('audio/wav');
+    expect(uploadMediaType('/m/notes.txt')).toBeNull();
+    expect(uploadMediaType('/m/no-extension')).toBeNull();
+  });
+});

@@ -233,6 +233,7 @@ export const copy = {
     popupAllReal: 'Everything is running for real.',
     popupDashboard: 'See how Parrot decides',
     popupActiveOn: 'Active on',
+    notDubbedYet: 'No dub yet',
     pageSourceNote: 'On X, Parrot reads the likes and views from this page. It cannot check them.',
     requestFailed: 'Parrot could not take that request. {detail}',
     notAuthor: 'Only the person who posted the video can ask for a dub.',

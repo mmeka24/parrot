@@ -22,6 +22,8 @@ export const X_TESTID = {
   tweetText: 'tweetText',
   /** Wraps the <video>. */
   videoPlayer: 'videoPlayer',
+  /** The inner video wrapper on x.com; a second hook for the same thing. */
+  videoComponent: 'videoComponent',
   reply: 'reply',
   retweet: 'retweet',
   like: 'like',
@@ -34,6 +36,8 @@ export const X_TESTID = {
   composerSubmitInline: 'tweetButtonInline',
   /** The signed-in account chip in the side nav; contains "@handle". */
   accountSwitcher: 'SideNav_AccountSwitcher_Button',
+  /** The side nav's Profile link, href "/{handle}". */
+  profileLink: 'AppTabBar_Profile_Link',
   primaryColumn: 'primaryColumn',
 } as const;
 

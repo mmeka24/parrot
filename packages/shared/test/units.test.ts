@@ -123,3 +123,18 @@ describe('sumMicros', () => {
     expect(sumMicros([micros(500n), micros(-200n)])).toBe(300n);
   });
 });
+
+describe('normalizeLanguageCode', () => {
+  it('maps the three-letter codes speech-to-text reports onto the two-letter codes jobs use', async () => {
+    const { normalizeLanguageCode } = await import('../src/constants.js');
+    expect(normalizeLanguageCode('spa')).toBe('es');
+    expect(normalizeLanguageCode('fre')).toBe('fr');
+    expect(normalizeLanguageCode('fra')).toBe('fr');
+    expect(normalizeLanguageCode('ger')).toBe('de');
+    expect(normalizeLanguageCode('es-MX')).toBe('es');
+    expect(normalizeLanguageCode('pt_BR')).toBe('pt');
+    expect(normalizeLanguageCode(' ES ')).toBe('es');
+    // Unknown stays unknown, so it can never match a supported language.
+    expect(normalizeLanguageCode('xyz')).toBe('xyz');
+  });
+});

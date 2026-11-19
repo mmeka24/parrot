@@ -124,7 +124,7 @@ function clockToSeconds(text: string): number | null {
  * exact counts rather than the rounded "5.4K" on screen.
  */
 function readPost(article: HTMLElement, postId: string): ExtensionObservedPostDto | null {
-  const player = article.querySelector(xSelector(X_TESTID.videoPlayer));
+  const player = videoIn(article);
   if (!player) return null;
 
   const anchor = article.querySelector('a time')?.closest('a');
@@ -169,11 +169,33 @@ function readPost(article: HTMLElement, postId: string): ExtensionObservedPostDt
   };
 }
 
-/** The signed-in handle, from the account chip in the side nav. */
+/**
+ * A post's video, by any of the hooks x.com has used for it - or simply a
+ * <video> inside the post, which no redesign can rename.
+ */
+function videoIn(article: HTMLElement): HTMLElement | null {
+  return (
+    article.querySelector<HTMLElement>(xSelector(X_TESTID.videoPlayer)) ??
+    article.querySelector<HTMLElement>(xSelector(X_TESTID.videoComponent)) ??
+    article.querySelector('video')?.parentElement ??
+    null
+  );
+}
+
+/**
+ * The signed-in handle. The account chip's text carries "@handle" when the side
+ * nav is wide; when it is collapsed to icons the text is gone, but the
+ * Profile link still points at /handle.
+ */
 function currentHandle(): string | null {
   const chip = document.querySelector(xSelector(X_TESTID.accountSwitcher));
-  const match = chip?.textContent?.match(/@([A-Za-z0-9_]{1,15})/);
-  return match?.[1]?.toLowerCase() ?? null;
+  const fromChip = chip?.textContent?.match(/@([A-Za-z0-9_]{1,15})/)?.[1];
+  if (fromChip) return fromChip.toLowerCase();
+  const profile = document
+    .querySelector(xSelector(X_TESTID.profileLink))
+    ?.getAttribute('href')
+    ?.match(/^\/([A-Za-z0-9_]{1,15})$/)?.[1];
+  return profile?.toLowerCase() ?? null;
 }
 
 function stateFor(postId: string): LocalState {
@@ -189,10 +211,35 @@ function stateFor(postId: string): LocalState {
 // The loop
 // ---------------------------------------------------------------------------
 
+/** True while a refresh is talking to the server; a second one waits its turn. */
+let refreshing = false;
+/** A refresh was asked for while one was running: run once more after it. */
+let again = false;
+
 async function refresh(): Promise<void> {
   if (timer !== null) window.clearTimeout(timer);
   timer = null;
+  if (refreshing) {
+    again = true;
+    return;
+  }
+  refreshing = true;
+  try {
+    await refreshOnce();
+  } finally {
+    refreshing = false;
+  }
+  if (again) {
+    again = false;
+    scheduleSoon();
+    return;
+  }
+  const busy = [...local.values()].some((s) => s.busy || s.sentAt !== null) ||
+    [...statuses.values()].some((s) => s.pending);
+  timer = window.setTimeout(() => void refresh(), busy ? POLL_BUSY_MS : POLL_IDLE_MS);
+}
 
+async function refreshOnce(): Promise<void> {
   const posts = findPosts();
   if (posts.length > 0) {
     if (!config) {
@@ -215,11 +262,25 @@ async function refresh(): Promise<void> {
       }
     }
     drawAll();
+    report(posts.length);
   }
+}
 
-  const busy = [...local.values()].some((s) => s.busy || s.sentAt !== null) ||
-    [...statuses.values()].some((s) => s.pending);
-  timer = window.setTimeout(() => void refresh(), busy ? POLL_BUSY_MS : POLL_IDLE_MS);
+/**
+ * One line in the page's console when what Parrot sees changes - the only way
+ * to tell, on a site we cannot test against, whether posts are being found.
+ * Open DevTools on x.com and look for "[Parrot]".
+ */
+let lastReport = '';
+function report(found: number): void {
+  const withVideo = findPosts().filter((p) => videoIn(p.article) !== null).length;
+  const line = `[Parrot] ${found} posts on the page, ${withVideo} with video; ` +
+    `signed in as ${currentHandle() ?? '(not detected)'}; ` +
+    `server ${config ? 'reachable' : 'NOT reachable'}`;
+  if (line !== lastReport) {
+    lastReport = line;
+    console.info(line);
+  }
 }
 
 /** Draw from what is already known. Cheap; runs on every page mutation. */
@@ -240,8 +301,18 @@ function drawAll(): void {
   }
 }
 
+let soonAt = 0;
+
+/**
+ * Refresh shortly. Never postpones one that is already due soon: x.com's page
+ * changes many times a second (autoplaying video alone does it), and a
+ * debounce that restarts on every change would never fire there.
+ */
 function scheduleSoon(): void {
+  const now = Date.now();
+  if (timer !== null && soonAt > now && soonAt - now <= 150) return;
   if (timer !== null) window.clearTimeout(timer);
+  soonAt = now + 150;
   timer = window.setTimeout(() => void refresh(), 150);
 }
 
@@ -287,7 +358,9 @@ function draw(
   const pending = status.pending || state.sentAt !== null || state.busy;
   const canDub = isAuthor && status.hasVideo;
 
-  if (watchable.length === 0 && !pending && !canDub && !state.message) {
+  // Every video post gets a strip, so it is visible that Parrot is running -
+  // a viewer sees "No dub yet" until someone asks for one.
+  if (!status.hasVideo && watchable.length === 0 && !pending && !state.message) {
     return removeStrip(article);
   }
 
@@ -315,6 +388,8 @@ function draw(
   if (watchable.length > 0) {
     row.append(el('span', { class: 'label' }, [t.watchPrefix]));
     for (const dub of watchable) row.append(watchChip(dub));
+  } else if (!pending && !canDub) {
+    row.append(el('span', { class: 'label' }, [t.notDubbedYet]));
   }
 
   if (pending) {
@@ -565,14 +640,19 @@ function readText(input: HTMLElement): string {
 function start(): void {
   // New posts (scrolling, navigation, a fresh reply) get drawn from what is
   // known at once, and fetched for if they are new.
+  let frame = 0;
   const observer = new MutationObserver((mutations) => {
     const ours = mutations.every((m) =>
       m.target instanceof Element && m.target.closest(`[${HOST_ATTR}]`) !== null,
     );
-    if (ours) return;
-    const unseen = findPosts().some((p) => !statuses.has(p.postId));
-    drawAll();
-    if (unseen) scheduleSoon();
+    if (ours || frame !== 0) return;
+    // Batch a burst of changes into one pass on the next frame.
+    frame = window.requestAnimationFrame(() => {
+      frame = 0;
+      const unseen = findPosts().some((p) => !statuses.has(p.postId));
+      drawAll();
+      if (unseen) scheduleSoon();
+    });
   });
   observer.observe(document.body, { childList: true, subtree: true });
 
