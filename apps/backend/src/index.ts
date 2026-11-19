@@ -34,6 +34,24 @@ import { SseHub } from './feed/sse.js';
 import { createApp } from './api/routes.js';
 import { createXApiAdapter } from './bot/x-adapter.js';
 import type { XAdapter } from './bot/x-adapter.js';
+import { mediaUrl } from './api/mappers.js';
+import { parseStatusHref } from '@parrot/shared';
+
+/**
+ * What stands behind a job's source link.
+ *
+ *  - `file`: a clip someone really uploaded to the stand-in. Dubbed for real
+ *    when a key is configured.
+ *  - `none`: a seeded demo post. It has a duration and engagement but no media,
+ *    so it is ALWAYS simulated - even with a key. Without this, adding a key
+ *    would send those links to the provider, fail every seeded job on boot, and
+ *    spend speech-recognition credits transcribing a stand-in tone.
+ *  - `remote`: a real post on the real service; the provider fetches the link.
+ */
+type SourceMedia =
+  | { kind: 'file'; path: string }
+  | { kind: 'none' }
+  | { kind: 'remote' };
 
 /**
  * Adapts DubbingService to the pipeline's port.
@@ -42,10 +60,24 @@ import type { XAdapter } from './bot/x-adapter.js';
  * ElevenLabs directly, so the provider can be swapped (or stubbed in a test)
  * without the state machine knowing.
  */
-function dubbingPort(service: DubbingService): DubbingPort {
+function dubbingPort(
+  service: DubbingService,
+  resolveSource: (sourceUrl: string) => SourceMedia,
+): DubbingPort {
   return {
     async createDub({ sourceUrl, targetLang, durationS }) {
-      const result = await service.createDub({ sourceUrl, targetLang, durationS });
+      const source = resolveSource(sourceUrl);
+      const result =
+        source.kind === 'file'
+          ? // A really-uploaded clip: send the bytes. The provider cannot fetch
+            // a localhost URL, so a link would only ever fail.
+            await service.createDub({ filePath: source.path, targetLang, durationS })
+          : await service.createDub({
+              sourceUrl,
+              targetLang,
+              durationS,
+              simulate: source.kind === 'none',
+            });
       return { providerJobId: result.providerJobId, simulated: result.simulated };
     },
     async pollUntilReady(providerJobId) {
@@ -102,6 +134,9 @@ function qcPort(service: QcService): QcPort {
       }
 
       return service.run({
+        // The stand-in render is named `.sim.wav` by DubbingService. Its
+        // language is reported as skipped rather than sent to be transcribed.
+        simulated: dubPath.endsWith('.sim.wav'),
         dubPath,
         sourceDurationS,
         // The simulated fixture is a short clip, so comparing its real length
@@ -138,16 +173,35 @@ async function main(): Promise<void> {
     hub.broadcast({ type: 'ticker', entry });
   };
 
-  const pipeline = new JobPipeline(store, decisions, payments, dubbingPort(dubbing), qcPort(qc), {
-    onTransition: (job, event) => {
-      hub.broadcast({ type: 'job', jobId: job.id, state: job.state });
-    },
-  });
-
-  // The X adapter: real when credentials exist, otherwise the mock console.
+  // The X adapter: real when credentials exist, otherwise the local stand-in.
   const realX: XAdapter | null = createXApiAdapter(config);
-  const mockX = new MockXAdapter(store);
+  const mockX = new MockXAdapter(store, {
+    botHandle: config.env.X_BOT_HANDLE,
+    permalinkBase: config.env.PUBLIC_XCLONE_URL,
+    mediaUrlFor: (videoPath) => mediaUrl(videoPath),
+  });
   const adapter: XAdapter = realX ?? mockX;
+
+  const resolveSource = (sourceUrl: string): SourceMedia => {
+    if (!adapter.isMock) return { kind: 'remote' };
+    const postId = parseStatusHref(sourceUrl)?.postId;
+    const videoPath = postId ? store.botPosts.get(postId)?.videoPath : null;
+    return videoPath ? { kind: 'file', path: videoPath } : { kind: 'none' };
+  };
+
+  const pipeline = new JobPipeline(
+    store,
+    decisions,
+    payments,
+    dubbingPort(dubbing, resolveSource),
+    qcPort(qc),
+    {
+      onTransition: (job, event) => {
+        hub.broadcast({ type: 'job', jobId: job.id, state: job.state });
+      },
+    },
+  );
+
   const bot = new BotService(store, adapter, { webBaseUrl: config.env.PUBLIC_WEB_URL });
 
   const scheduler = new SettlementScheduler({
@@ -319,6 +373,10 @@ async function main(): Promise<void> {
     await processMention(mention.id);
   }
 
+  // Seeding is done on a fixed clock so it replays identically. From here on
+  // posts are written by people, and are stamped when they are written.
+  mockX.useWallClock();
+
   learning.start();
   scheduler.start();
 
@@ -339,6 +397,13 @@ async function main(): Promise<void> {
       });
       return processMention(mention.id);
     },
+    xclone: {
+      store,
+      mockX,
+      enabled: adapter.isMock,
+      processMentionById: processMention,
+    },
+    extension: { store, adapter, botHandle: config.env.X_BOT_HANDLE },
   });
 
   const port = config.env.BACKEND_PORT;

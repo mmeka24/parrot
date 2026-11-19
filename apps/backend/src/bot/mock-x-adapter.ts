@@ -87,6 +87,22 @@ export interface MockXAdapterOptions {
   readonly botHandle?: string;
   readonly botUserId?: string;
   readonly epochMs?: number;
+  /**
+   * Origin that post permalinks are built on. Defaults to x.com so a bare
+   * adapter still produces X-shaped links; the backend passes the local clone's
+   * origin so a permalink actually opens the post it names.
+   */
+  readonly permalinkBase?: string;
+  /** Builds the public URL of an uploaded source video from its file path. */
+  readonly mediaUrlFor?: (videoPath: string) => string | null;
+}
+
+/** A post written through the clone's composer. */
+export interface CreateClonePostInput {
+  readonly text: string;
+  readonly authorHandle: string;
+  readonly inReplyToPostId?: string | null;
+  readonly video?: { readonly durationS: number; readonly path: string | null } | null;
 }
 
 export class MockXAdapter implements XAdapter {
@@ -100,6 +116,11 @@ export class MockXAdapter implements XAdapter {
   private readonly mentions: Mention[] = [];
   private seq = 0;
   private readonly epochMs: number;
+  private readonly permalinkBase: string;
+  private readonly mediaUrlFor: (videoPath: string) => string | null;
+  /** False while seeding (fixed clock, replayable); true once people post live. */
+  private wallClock = false;
+  private lastStampMs = 0;
 
   constructor(
     private readonly store: Store,
@@ -108,6 +129,8 @@ export class MockXAdapter implements XAdapter {
     this.botHandle = options.botHandle ?? MOCK_BOT_HANDLE;
     this.botUserId = options.botUserId ?? MOCK_BOT_USER_ID;
     this.epochMs = options.epochMs ?? MOCK_EPOCH_MS;
+    this.permalinkBase = (options.permalinkBase ?? 'https://x.com').replace(/\/$/, '');
+    this.mediaUrlFor = options.mediaUrlFor ?? (() => null);
     for (const user of MOCK_USERS) this.users.set(user.handle, user);
     if (options.seed !== false) this.seed();
   }
@@ -149,7 +172,11 @@ export class MockXAdapter implements XAdapter {
               type: 'video',
               durationMs: Math.round(post.videoDurationS * 1000),
               previewImageUrl: `https://mock.x.test/preview/${post.id}.jpg`,
-              url: `https://mock.x.test/video/${post.id}.mp4`,
+              // A really-uploaded clip resolves to where it is served; a seeded
+              // post has no media, and its placeholder URL says so.
+              url:
+                (post.videoPath ? this.mediaUrlFor(post.videoPath) : null) ??
+                `https://mock.x.test/video/${post.id}.mp4`,
             }
           : null,
       lang: 'en',
@@ -230,6 +257,53 @@ export class MockXAdapter implements XAdapter {
     return mention;
   }
 
+  /**
+   * Write an ordinary post or reply, as the clone's composer does. This is NOT
+   * a mention: nothing here reaches the bot. A post that addresses the bot goes
+   * through injectMention instead.
+   */
+  createPost(input: CreateClonePostInput): BotPost {
+    const parent = input.inReplyToPostId
+      ? (this.store.botPosts.get(input.inReplyToPostId) ?? null)
+      : null;
+    const user = this.userFor(input.authorHandle) ?? this.registerUser(input.authorHandle);
+    const video = input.video ?? null;
+    return this.writePost({
+      authorHandle: user.handle,
+      authorDisplayName: user.displayName,
+      authorXUserId: user.xUserId,
+      text: input.text,
+      isBot: false,
+      inReplyToId: parent?.id ?? null,
+      parentAuthorXUserId: parent?.authorXUserId ?? null,
+      // Top-level posts start with real zeroes; replies carry no metrics, the
+      // same as every other reply in this store.
+      metrics: parent ? null : { likes: 0, replies: 0, reposts: 0, quotes: 0, views: 0 },
+      hasVideo: video !== null,
+      videoDurationS: video?.durationS ?? null,
+      videoPath: video?.path ?? null,
+      jobId: null,
+      posted: false,
+    });
+  }
+
+  /**
+   * Switch from the fixed seeding clock to real time. Called once the demo
+   * world is seeded, so the seed replays identically but a post written by a
+   * person is stamped when they wrote it - which the age signal depends on.
+   */
+  useWallClock(): void {
+    this.wallClock = true;
+  }
+
+  /** Everyone with an account on fake-X, the bot included. */
+  listUsers(): MockXUser[] {
+    return [
+      ...this.users.values(),
+      { handle: this.botHandle, displayName: 'Parrot', xUserId: this.botUserId, followers: 0 },
+    ];
+  }
+
   /** The id of the Nth seeded video post, for wiring a console demo. */
   seededPostIds(): string[] {
     return [...this.store.botPosts.values()].filter((p) => p.hasVideo).map((p) => p.id);
@@ -238,7 +312,7 @@ export class MockXAdapter implements XAdapter {
   /** The canonical fake-X permalink for a post. parsedIntentSchema wants a URL. */
   postUrl(postId: string): string {
     const post = this.store.botPosts.get(postId);
-    return `https://x.com/${post?.authorHandle ?? 'unknown'}/status/${postId}`;
+    return `${this.permalinkBase}/${post?.authorHandle ?? 'unknown'}/status/${postId}`;
   }
 
   userFor(handle: string): MockXUser | undefined {
@@ -290,7 +364,14 @@ export class MockXAdapter implements XAdapter {
     return this.store.createBotPost({
       ...input,
       id: `mock-post-${this.seq}`,
-      createdAt: new Date(this.epochMs + this.seq * MOCK_STEP_MS),
+      createdAt: new Date(this.stamp()),
     });
+  }
+
+  /** Strictly increasing, so a thread sorted by time is in the order it was written. */
+  private stamp(): number {
+    const candidate = this.wallClock ? Date.now() : this.epochMs + this.seq * MOCK_STEP_MS;
+    this.lastStampMs = Math.max(candidate, this.lastStampMs + 1);
+    return this.lastStampMs;
   }
 }

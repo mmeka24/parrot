@@ -73,6 +73,12 @@ export interface QcInput {
   readonly dubDurationS: number;
   /** The language the dub is supposed to be in. */
   readonly targetLang: string;
+  /**
+   * True when the "dub" is the stand-in fixture rather than a real render.
+   * Its language is then reported as skipped, never checked: transcribing a
+   * fixture would spend real credits to learn nothing.
+   */
+  readonly simulated?: boolean;
 }
 
 export type FetchImpl = (input: string, init?: RequestInit) => Promise<Response>;
@@ -161,6 +167,13 @@ export class QcService {
   // -------------------------------------------------------------------------
 
   async checkLanguage(input: QcInput): Promise<QcCheckResult> {
+    if (input.simulated === true) {
+      return skipped(
+        'language_detect',
+        'Skipped: this dub is a simulated stand-in, so there is no real speech to verify.',
+        { reason: 'simulated_dub' },
+      );
+    }
     if (!getConfig().capabilities.qcLanguageDetection) {
       return skipped(
         'language_detect',

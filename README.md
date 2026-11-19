@@ -27,7 +27,8 @@ than a smaller honest one.
 | On-chain USDC settlement on Arc | **Written and typechecked, never broadcast.** No funded keys. |
 | ElevenLabs dubbing + Scribe STT QC | **Written against the real API, never called.** No API key. |
 | QuickNode Streams webhook + filter | **Real, unit-tested offline.** Never received a live delivery. |
-| X API | **Written, never called.** The demo runs on a mock X console. |
+| X API | **Written, never called.** The demo runs on Chirp, a local stand-in for X. |
+| Browser extension | **Real, run end to end against Chirp** in Chromium. Never run on x.com. |
 | Grok intent parsing | **Written, never called.** A regex fallback is what actually runs. |
 | ffmpeg audio checks | **Not run.** ffmpeg is absent, so the check reports `skipped`, never `passed`. |
 
@@ -315,6 +316,48 @@ credentials appear.
 npm test                 # 428 tests
 npm run typecheck
 ```
+
+## Parrot as a browser extension
+
+Parrot also ships as a Chrome extension that draws onto the posts in a timeline.
+Because the real X API bills $0.20 for every reply that contains a link, the
+timeline it runs on in this repo is **Chirp** (`apps/x-clone`), a small local
+stand-in for X that shares the backend's store.
+
+```bash
+npm run dev:backend        # :8787 - Parrot, plus Chirp's own /api/x routes
+npm run dev:xclone         # :3200 - Chirp
+npm run build:extension    # -> apps/extension/dist
+```
+
+Then `chrome://extensions` → Developer mode → **Load unpacked** →
+`apps/extension/dist`, and open http://localhost:3200.
+
+Under each post the extension adds a strip:
+
+- **Anyone** sees "Also in Spanish, Hindi…" chips that open the dub page.
+- **The creator, on their own video**, gets **Dub this** → pick a language.
+
+"Dub this" does not call Parrot. It opens the reply box under the creator's own
+post, types `@parrot dub this to French`, and sends it, exactly what the creator
+would do by hand. Parrot finds that mention like any other, checks **on its own
+records** that the person asking wrote the post, and answers in the thread. The
+extension's only server calls are two reads (`/api/extension/config`,
+`/api/extension/posts?ids=`); it sends post ids, never post content, because
+anything read out of a web page can be forged by the person looking at it.
+
+**How it finds posts.** Chirp emits x.com's own `data-testid` hooks
+(`tweet`, `User-Name`, `tweetTextarea_0`, …), listed once in
+`packages/shared/src/x-dom.ts`, and the content script reads only those. The same
+script is meant to run on x.com unchanged. **That has not been tried.** The
+manifest only matches `localhost`, x.com changes those hooks without notice, and
+the backend's mock adapter would not recognise real post ids anyway.
+
+**Seeded posts vs. uploads.** The four seeded posts have engagement numbers but no
+footage, and they are always dubbed with the stand-in audio, even when an
+ElevenLabs key is set. A video **uploaded through Chirp's composer** is a real
+file: with `ELEVENLABS_API_KEY` set, the backend sends those bytes to ElevenLabs
+and the dub is real (and costs credits).
 
 ## Demo
 

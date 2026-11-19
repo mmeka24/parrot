@@ -44,6 +44,8 @@ import {
   tickerFromUnlock,
 } from './mappers.js';
 import { getConfig } from '../config.js';
+import { registerXCloneRoutes, type XCloneDeps } from '../xclone/routes.js';
+import { registerExtensionRoutes, type ExtensionDeps } from '../extension/routes.js';
 
 /** Cookie that identifies a guest viewer. No sign-in, no popup, no wallet. */
 const VIEWER_COOKIE = 'parrot_viewer';
@@ -70,6 +72,10 @@ export interface RouteDeps {
   ) => Promise<string | null>;
   /** Pushes a new bot post to connected dashboards. */
   broadcastPost?: (post: BotPostDto) => void;
+  /** The local X stand-in's backend (/api/x/*). Omitted in tests that do not need it. */
+  xclone?: XCloneDeps;
+  /** What the browser extension reads (/api/extension/*). */
+  extension?: ExtensionDeps;
 }
 
 function sendError(res: Response, status: number, error: ApiErrorDto): void {
@@ -489,6 +495,13 @@ export function createApp(deps: RouteDeps): Express {
   if (deps.sseHandler) {
     app.get('/api/stream', deps.sseHandler);
   }
+
+  // -------------------------------------------------------------------------
+  // The X stand-in and the browser extension
+  // -------------------------------------------------------------------------
+
+  if (deps.xclone) registerXCloneRoutes(app, deps.xclone);
+  if (deps.extension) registerExtensionRoutes(app, deps.extension);
 
   app.use((_req, res) => {
     sendError(res, 404, {

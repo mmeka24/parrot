@@ -22,6 +22,9 @@
     "dev:backend": "npm run dev -w @parrot/backend",
     "dev:web": "npm run dev -w @parrot/web",
     "dev:agents": "npm run dev -w @parrot/agents",
+    "dev:xclone": "npm run dev -w @parrot/x-clone",
+    "build:extension": "npm run build -w @parrot/extension",
+    "watch:extension": "npm run watch -w @parrot/extension",
     "demo": "node scripts/demo.mjs"
   },
   "devDependencies": {

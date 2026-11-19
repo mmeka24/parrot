@@ -1,0 +1,26 @@
+{
+  "name": "@parrot/x-clone",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chirp - a local stand-in for X, so the Parrot extension has a timeline to run on without the paid X API.",
+  "scripts": {
+    "dev": "next dev --port 3200",
+    "build": "next build",
+    "start": "next start --port 3200",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@parrot/shared": "*",
+    "next": "15.1.6",
+    "react": "19.0.0",
+    "react-dom": "19.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.5",
+    "@types/node": "^22.10.2",
+    "@types/react": "19.0.7",
+    "@types/react-dom": "19.0.3",
+    "tailwindcss": "4.3.5",
+    "typescript": "^5.7.2"
+  }
+}

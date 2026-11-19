@@ -306,6 +306,126 @@ export interface InjectMentionRequestDto {
 }
 
 // ---------------------------------------------------------------------------
+// The local X stand-in (apps/x-clone)  -  /api/x/*
+//
+// These routes are the stand-in's OWN backend, hosted in the Parrot process for
+// convenience. Parrot's bot reads the same posts through its XAdapter; the
+// browser extension never calls anything under /api/x.
+// ---------------------------------------------------------------------------
+
+export interface XUserDto {
+  readonly handle: string;
+  readonly displayName: string;
+  readonly followers: number;
+  readonly isBot: boolean;
+}
+
+export interface XPostDto {
+  readonly id: string;
+  readonly author: XUserDto;
+  readonly text: string;
+  readonly createdAt: string;
+  readonly inReplyToId: string | null;
+  /** Handle of the post being replied to, for "Replying to @x". */
+  readonly inReplyToHandle: string | null;
+  readonly metrics: {
+    readonly likes: number;
+    readonly replies: number;
+    readonly reposts: number;
+    readonly views: number | null;
+  };
+  readonly video: {
+    readonly durationS: number;
+    /** Null for the seeded demo posts, which have no media behind them. */
+    readonly url: string | null;
+  } | null;
+}
+
+export interface XTimelineDto {
+  readonly users: readonly XUserDto[];
+  /** Top-level posts, newest first. */
+  readonly posts: readonly XPostDto[];
+  readonly botHandle: string;
+}
+
+export interface XThreadDto {
+  readonly post: XPostDto;
+  /** The chain of posts above this one, oldest first. Empty for a top-level post. */
+  readonly ancestors: readonly XPostDto[];
+  /** Everything below this post, oldest first. */
+  readonly replies: readonly XPostDto[];
+}
+
+export interface XCreatePostRequestDto {
+  readonly text: string;
+  readonly authorHandle: string;
+  readonly inReplyToId?: string | null;
+  readonly video?: { readonly mediaId: string; readonly durationS: number } | null;
+}
+
+export interface XMediaUploadDto {
+  readonly mediaId: string;
+  readonly url: string;
+}
+
+export interface XEngageRequestDto {
+  readonly kind: 'like' | 'repost';
+  /** +1 to add, -1 to undo. */
+  readonly delta: 1 | -1;
+}
+
+// ---------------------------------------------------------------------------
+// The browser extension  -  /api/extension/*
+//
+// The extension is UI only. It sends post IDS it found in the page and renders
+// what comes back; it is never a source of truth. Authorship, engagement and
+// the video itself are always resolved by the backend through its XAdapter,
+// because anything scraped from a page can be forged by the person viewing it.
+// ---------------------------------------------------------------------------
+
+export interface ExtensionConfigDto {
+  readonly botHandle: string;
+  /** e.g. "@{handle} dub this to {language}" - what the extension types for you. */
+  readonly requestTemplate: string;
+  readonly languages: readonly { readonly code: string; readonly englishName: string }[];
+  readonly unlockPrice: MoneyDto;
+  /** The creator's share of each unlock, as a whole percentage. */
+  readonly creatorPercent: number;
+  readonly webUrl: string;
+  /** Plain-language list of what is simulated right now, as in SystemStatusDto. */
+  readonly simulated: readonly string[];
+}
+
+export interface ExtensionDubDto {
+  readonly jobId: string;
+  readonly languageCode: string;
+  readonly languageName: string;
+  readonly state: JobState;
+  readonly statusLabel: string;
+  /** True once a viewer can actually watch it. */
+  readonly watchable: boolean;
+  /** Present only when watchable. */
+  readonly watchUrl: string | null;
+}
+
+export interface ExtensionPostStatusDto {
+  readonly postId: string;
+  /** False when the backend cannot resolve this post; the extension then stays silent. */
+  readonly known: boolean;
+  readonly hasVideo: boolean;
+  readonly authorHandle: string | null;
+  readonly dubs: readonly ExtensionDubDto[];
+  /** A request under this post is being worked on right now. */
+  readonly pending: boolean;
+  /** Parrot's most recent answer under this post, in its own words. */
+  readonly lastReply: { readonly text: string; readonly at: string } | null;
+}
+
+export interface ExtensionStatusResponseDto {
+  readonly posts: readonly ExtensionPostStatusDto[];
+}
+
+// ---------------------------------------------------------------------------
 // Demo controls
 // ---------------------------------------------------------------------------
 

@@ -148,6 +148,12 @@ export interface CreateDubInput {
   readonly numSpeakers?: number;
   readonly watermark?: boolean;
   readonly name?: string;
+  /**
+   * Force the fixture path even when a key is configured. Set for sources that
+   * have no real media behind them (the seeded demo posts): sending those to
+   * the provider could only fail, and would make a keyed demo boot broken.
+   */
+  readonly simulate?: boolean;
 }
 
 export interface CreateDubResult {
@@ -195,6 +201,9 @@ export interface DubbingServiceDeps {
   readonly requestTimeoutMs?: number;
 }
 
+/** Every simulated provider job id starts with this. See isLiveJob(). */
+export const SIMULATED_JOB_PREFIX = 'sim_dub_';
+
 const DEFAULT_POLL_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 
@@ -228,6 +237,15 @@ export class DubbingService {
   /** True when a real API key is configured. Read per call so tests can flip it. */
   get isLive(): boolean {
     return getConfig().capabilities.dubbing;
+  }
+
+  /**
+   * Whether THIS job was really bought. A simulated job keeps its `sim_dub_`
+   * id for life, so status and download can never reach the provider for it,
+   * even when a key is present.
+   */
+  private isLiveJob(providerJobId: string): boolean {
+    return this.isLive && !providerJobId.startsWith(SIMULATED_JOB_PREFIX);
   }
 
   /** How many dub jobs currently hold a concurrency permit. */
@@ -271,7 +289,10 @@ export class DubbingService {
     await this.semaphore.acquire();
     let acquired = true;
     try {
-      const result = this.isLive ? await this.createDubLive(input) : this.createDubMock(input);
+      const result =
+        this.isLive && input.simulate !== true
+          ? await this.createDubLive(input)
+          : this.createDubMock(input);
       this.heldPermits.add(result.providerJobId);
       acquired = false; // ownership moved to heldPermits
       return result;
@@ -294,7 +315,7 @@ export class DubbingService {
     ].join('|');
     const digest = createHash('sha256').update(seed).digest('hex').slice(0, 16);
     return {
-      providerJobId: `sim_dub_${digest}`,
+      providerJobId: `${SIMULATED_JOB_PREFIX}${digest}`,
       expectedDurationSec: Math.max(1, Math.round(input.durationS)),
       simulated: true,
     };
@@ -343,7 +364,7 @@ export class DubbingService {
 
   /** One status read. Does not retry past the transport-level retries. */
   async getStatus(providerJobId: string): Promise<DubStatus> {
-    if (!this.isLive) {
+    if (!this.isLiveJob(providerJobId)) {
       return {
         providerJobId,
         status: 'dubbed',
@@ -426,7 +447,7 @@ export class DubbingService {
   async downloadDub(providerJobId: string, languageCode: string): Promise<DownloadedDub> {
     await mkdir(this.mediaDir, { recursive: true });
 
-    if (!this.isLive) {
+    if (!this.isLiveJob(providerJobId)) {
       const target = join(this.mediaDir, `${providerJobId}.${languageCode}.sim.wav`);
       await this.ensureFixture();
       await copyFile(MOCK_FIXTURE, target);
@@ -464,7 +485,7 @@ export class DubbingService {
 
   /** Best-effort cleanup. A failure here never fails a job. */
   async deleteDub(providerJobId: string): Promise<boolean> {
-    if (!this.isLive) return false;
+    if (!this.isLiveJob(providerJobId)) return false;
     try {
       await this.request(`/v1/dubbing/${encodeURIComponent(providerJobId)}`, { method: 'DELETE' });
       return true;

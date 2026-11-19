@@ -1,0 +1,120 @@
+@import 'tailwindcss';
+
+/* ---------------------------------------------------------------------------
+   Chirp - a local stand-in for X.
+   Deliberately plain: a neutral timeline with hairline rules and one accent,
+   so that anything Parrot adds on top is obviously Parrot's.
+--------------------------------------------------------------------------- */
+
+:root {
+  color-scheme: light;
+
+  --bg: #ffffff;
+  --bg-hover: #f7f9f9;
+  --bg-sunk: #eff3f4;
+  --text: #0f1419;
+  --text-dim: #536471;
+  --rule: #eff3f4;
+  --rule-strong: #cfd9de;
+  --accent: #1d9bf0;
+  --accent-hover: #1a8cd8;
+  --on-accent: #ffffff;
+  --like: #f91880;
+  --repost: #00ba7c;
+  --scrim: rgba(0, 0, 0, 0.4);
+  --note-bg: #fff8e1;
+  --note-text: #5f4b00;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --bg: #000000;
+    --bg-hover: #080808;
+    --bg-sunk: #16181c;
+    --text: #e7e9ea;
+    --text-dim: #71767b;
+    --rule: #2f3336;
+    --rule-strong: #3e4144;
+    --accent: #1d9bf0;
+    --accent-hover: #1a8cd8;
+    --on-accent: #ffffff;
+    --like: #f91880;
+    --repost: #00ba7c;
+    --scrim: rgba(91, 112, 131, 0.4);
+    --note-bg: #2a2206;
+    --note-text: #f2d88a;
+  }
+}
+
+@theme inline {
+  --color-surface: var(--bg);
+  --color-hover: var(--bg-hover);
+  --color-sunk: var(--bg-sunk);
+  --color-ink: var(--text);
+  --color-dim: var(--text-dim);
+  --color-rule: var(--rule);
+  --color-rule-strong: var(--rule-strong);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-on-accent: var(--on-accent);
+  --color-like: var(--like);
+  --color-repost: var(--repost);
+  --color-scrim: var(--scrim);
+  --color-note: var(--note-bg);
+  --color-on-note: var(--note-text);
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+body {
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 20px;
+  -webkit-font-smoothing: antialiased;
+  overflow-y: scroll;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes clip-progress {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -5,6 +5,12 @@ const config: NextConfig = {
   // @parrot/shared ships raw TypeScript from src/, so Next must compile it.
   transpilePackages: ['@parrot/shared'],
   eslint: { ignoreDuringBuilds: true },
+  // The bot's replies link to the short form /w/{id} (bot-service.ts
+  // watchLink); the page lives at /dub/{id}. Without this every link Parrot
+  // posts is a 404.
+  async redirects() {
+    return [{ source: '/w/:id', destination: '/dub/:id', permanent: false }];
+  },
   webpack(config) {
     // @parrot/shared is authored for NodeNext and imports siblings as "./x.js".
     // Point those specifiers back at the TypeScript sources.

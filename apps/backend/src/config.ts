@@ -41,6 +41,8 @@ const envSchema = z.object({
   BACKEND_PORT: z.coerce.number().int().positive().default(8787),
   PUBLIC_WEB_URL: z.string().url().default('http://localhost:3000'),
   PUBLIC_BACKEND_URL: z.string().url().default('http://localhost:8787'),
+  /** Where the local X stand-in (apps/x-clone) is served. Used for permalinks. */
+  PUBLIC_XCLONE_URL: z.string().url().default('http://localhost:3200'),
   DEMO_MODE: boolish,
 
   ARC_RPC_URL: z.string().url().default(ARC_TESTNET.rpcUrl),
@@ -151,7 +153,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
   if (!capabilities.x402Payments) mockedSubsystems.push('viewer payments (simulated)');
   if (!capabilities.dubbing) mockedSubsystems.push('dubbing (fixture audio)');
   if (!capabilities.qcLanguageDetection) mockedSubsystems.push('QC language detection (heuristic)');
-  if (!capabilities.xApi) mockedSubsystems.push('X (mock bot console)');
+  if (!capabilities.xApi) mockedSubsystems.push('X (local clone, not x.com)');
   if (!capabilities.grokParsing) mockedSubsystems.push('intent parsing (regex fallback)');
   if (!capabilities.quicknodeStream) mockedSubsystems.push('chain feed (RPC polling)');
 

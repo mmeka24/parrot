@@ -218,6 +218,11 @@ export interface BotPost {
   } | null;
   hasVideo: boolean;
   videoDurationS: number | null;
+  /**
+   * Local path of a really-uploaded source video (clone posts only). Absent on
+   * the seeded demo posts, which have a duration but no media behind them.
+   */
+  videoPath?: string | null;
   jobId: string | null;
   /** False when this is a mock post rather than a real one from X. */
   posted: boolean;
