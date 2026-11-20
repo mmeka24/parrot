@@ -160,8 +160,8 @@ export function createApp(deps: RouteDeps): Express {
    * unless DEMO_ADMIN_TOKEN is set, and then need it in an `x-admin-token` header.
    */
   function demoAllowed(req: Request): boolean {
-    const { NODE_ENV, DEMO_ADMIN_TOKEN } = getConfig().env;
-    if (NODE_ENV !== 'production') return true;
+    const { NODE_ENV, DEMO_ADMIN_TOKEN, DEMO_OPEN } = getConfig().env;
+    if (NODE_ENV !== 'production' || DEMO_OPEN) return true;
     return DEMO_ADMIN_TOKEN !== undefined && req.headers['x-admin-token'] === DEMO_ADMIN_TOKEN;
   }
 
