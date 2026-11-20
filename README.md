@@ -6,6 +6,28 @@ A creator posts a video. Parrot dubs it into several languages with ElevenLabs, 
 
 Built for UBC 26. Main track: **Consumer Applications**. Chain: **Arc testnet**. Bounties: **ElevenLabs**, **Grok Bot**.
 
+## Live demo
+
+**Try it: https://parrot-web.fly.dev**
+
+| What | Link |
+| --- | --- |
+| Creator dashboard (start here, the demo creator is Maria) | https://parrot-web.fly.dev/creator/maria |
+| Get the browser extension | https://parrot-web.fly.dev/extension |
+| The X stand-in timeline (Chirp) | https://parrot-chirp.fly.dev |
+| Backend API (health check) | https://parrot-backend.fly.dev/api/health |
+
+Press **Dub into N languages** on an undubbed post, then **Send a demo audience** and watch the
+views, the language plan and the payments move. Things to know about the live deployment:
+
+- It runs on **Arc testnet**. Nothing here is real money.
+- State is kept in memory, so a server restart resets the demo to its seeded starting point.
+- Demo creators pay from a labelled test balance. Only a creator who signs in with Google gets a
+  real Arc wallet and a real per-view USDC charge.
+- Real dubs use ElevenLabs credit, so the server has a daily spend cap. A video with no sound
+  cannot be dubbed.
+- It is hosted on Fly.io (config in `fly*.toml`).
+
 ## What is real and what is not
 
 | Part | Status |
