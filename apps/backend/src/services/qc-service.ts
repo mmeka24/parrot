@@ -4,9 +4,16 @@
  * Four checks, run in this order:
  *
  *   1. duration_match   the dub is within QC_DURATION_TOLERANCE of the source
- *   2. language_detect  ElevenLabs Scribe hears the target language, confidently
+ *   2. language_detect  the dub is in the target language
  *   3. audio_sanity     ffmpeg: enough sound, no long dead gap, sane loudness
- *   4. back_translation NOT IMPLEMENTED - first item on the cut list, and said so
+ *   4. back_translation the dub, translated back to English, means what the
+ *                       original said
+ *
+ * WHO JUDGES: the company that made a dub never gives the verdict on it.
+ * ElevenLabs Scribe only TRANSCRIBES (the original and the dub). The verdict on
+ * language and meaning comes from an independent judge, Grok (qc-judge.ts).
+ * Without a judge configured, language falls back to Scribe's own language ID
+ * and the meaning check is reported as skipped.
  *
  * THE HONESTY RULE THAT SHAPES THIS FILE: a check that did not run is reported
  * as SKIPPED, with the reason, and never as a pass. ffmpeg is not installed on
@@ -25,6 +32,7 @@ import { readFile } from 'node:fs/promises';
 import {
   QC_DURATION_TOLERANCE,
   QC_MIN_LANGUAGE_CONFIDENCE,
+  QC_MIN_MEANING_SCORE,
   QC_MIN_NON_SILENCE_RATIO,
   QC_MAX_DEAD_GAP_S,
   QC_LOUDNESS_RANGE_LUFS,
@@ -34,6 +42,7 @@ import {
   type QcReport,
 } from '@parrot/shared';
 import { getConfig } from '../config.js';
+import { JUDGE_NAME, judgeDub, type JudgeVerdict } from './qc-judge.js';
 
 const ELEVENLABS_BASE_URL = 'https://api.elevenlabs.io';
 
@@ -80,6 +89,19 @@ export interface QcInput {
    * fixture would spend real credits to learn nothing.
    */
   readonly simulated?: boolean;
+  /**
+   * The original clip's audio: a local path or an http(s) URL. Needed for the
+   * meaning check; without it back_translation is skipped.
+   */
+  readonly sourcePath?: string;
+  /** Who made the dub, e.g. "ElevenLabs". Shown next to who judged it. */
+  readonly dubProvider?: string;
+}
+
+interface Transcript {
+  language_code: string;
+  language_probability: number;
+  text: string;
 }
 
 export type FetchImpl = (input: string, init?: RequestInit) => Promise<Response>;
@@ -117,14 +139,108 @@ export class QcService {
 
   /** Run the whole gate. Never throws for a failing dub - it reports. */
   async run(input: QcInput): Promise<QcServiceReport> {
-    const checks: QcCheckResult[] = [
-      this.checkDuration(input),
-      await this.checkLanguage(input),
-      await this.checkAudioSanity(input),
-      this.checkBackTranslation(),
-    ];
+    const duration = this.checkDuration(input);
+    const heard = await this.languageAndTranscript(input);
+    const audio = await this.checkAudioSanity(input);
+    const meaning = await this.checkMeaning(input, heard.transcript);
+
+    // With an independent verdict, the judge - not the transcriber - decides
+    // the language too.
+    const language = meaning.verdict
+      ? this.languageFromJudge(input, meaning.verdict, heard.transcript)
+      : heard.check;
+
+    const checks: QcCheckResult[] = [duration, language, audio, meaning.check];
     const passed = checks.every((c) => c.passed);
     return { passed, checks, ranAt: this.now() };
+  }
+
+  /** The judge's own reading of the dub's language. */
+  private languageFromJudge(
+    input: QcInput,
+    verdict: JudgeVerdict,
+    stt: Transcript | null,
+  ): QcCheckResult {
+    const want = normalizeLanguageCode(input.targetLang);
+    const judged = normalizeLanguageCode(verdict.language);
+    const ok = judged === want;
+    const by = `judged by ${JUDGE_NAME}${input.dubProvider ? `, independent of ${input.dubProvider}, which made the dub` : ''}`;
+    return {
+      name: 'language_detect',
+      passed: ok,
+      status: ok ? 'passed' : 'failed',
+      detail: ok
+        ? `The dub is ${languageName(want)} (${by}).`
+        : `The dub is ${languageName(judged)}, not the ${languageName(want)} that was ordered (${by}).`,
+      measured: {
+        judge: JUDGE_NAME,
+        judged,
+        expected: want,
+        ...(stt ? { transcriberHeard: normalizeLanguageCode(stt.language_code) } : {}),
+      },
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // 4. back_translation (the meaning check)
+  // -------------------------------------------------------------------------
+
+  async checkMeaning(
+    input: QcInput,
+    dubTranscript: Transcript | null,
+  ): Promise<{ check: QcCheckResult; verdict: JudgeVerdict | null }> {
+    const skip = (detail: string, reason: string) => ({
+      check: skipped('back_translation', detail, { reason }),
+      verdict: null,
+    });
+    const env = getConfig().env;
+    if (input.simulated === true) {
+      return skip(
+        'Skipped: this dub is a simulated stand-in, so there is no real speech to compare.',
+        'simulated_dub',
+      );
+    }
+    if (!env.XAI_API_KEY) {
+      return skip('Skipped: no independent judge is configured, so the meaning was not checked.', 'no_judge');
+    }
+    if (!dubTranscript || dubTranscript.text.trim() === '') {
+      return skip(
+        'Skipped: the dub could not be transcribed, so its meaning could not be compared.',
+        'no_dub_transcript',
+      );
+    }
+    if (!input.sourcePath) {
+      return skip('Skipped: the original clip is not available to compare against.', 'no_source');
+    }
+    let source: Transcript;
+    try {
+      source = await this.transcribe(input.sourcePath);
+    } catch (err) {
+      return skip(`Skipped: the original clip could not be transcribed (${describe(err)}).`, 'source_unreadable');
+    }
+    const verdict = await judgeDub(
+      { sourceText: source.text, dubText: dubTranscript.text, targetLang: input.targetLang },
+      { apiKey: env.XAI_API_KEY, baseUrl: env.XAI_BASE_URL, model: env.XAI_MODEL, fetchImpl: this.fetchImpl },
+    );
+    if (!verdict) {
+      return skip('Skipped: the independent judge could not be reached.', 'judge_unreachable');
+    }
+    const ok = verdict.meaningScore >= QC_MIN_MEANING_SCORE;
+    return {
+      verdict,
+      check: {
+        name: 'back_translation',
+        passed: ok,
+        status: ok ? 'passed' : 'failed',
+        detail: `${ok ? 'The dub keeps the meaning' : 'The dub changes the meaning'}: ${verdict.meaningScore}/100 (we require ${QC_MIN_MEANING_SCORE}). ${verdict.reason}`,
+        measured: {
+          judge: JUDGE_NAME,
+          meaningScore: verdict.meaningScore,
+          minimum: QC_MIN_MEANING_SCORE,
+          backTranslation: verdict.backTranslation.slice(0, 500),
+        },
+      },
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -168,30 +284,38 @@ export class QcService {
   // -------------------------------------------------------------------------
 
   async checkLanguage(input: QcInput): Promise<QcCheckResult> {
+    return (await this.languageAndTranscript(input)).check;
+  }
+
+  /** Transcribe the dub once; the transcript also feeds the meaning check. */
+  private async languageAndTranscript(
+    input: QcInput,
+  ): Promise<{ check: QcCheckResult; transcript: Transcript | null }> {
+    const done = (c: QcCheckResult, transcript: Transcript | null = null) => ({ check: c, transcript });
     if (input.simulated === true) {
-      return skipped(
+      return done(skipped(
         'language_detect',
         'Skipped: this dub is a simulated stand-in, so there is no real speech to verify.',
         { reason: 'simulated_dub' },
-      );
+      ));
     }
     if (!getConfig().capabilities.qcLanguageDetection) {
-      return skipped(
+      return done(skipped(
         'language_detect',
         'Skipped: the speech recognition service is not configured, so the spoken language was not verified.',
         { reason: 'no_credentials' },
-      );
+      ));
     }
 
-    let stt: { language_code: string; language_probability: number; text: string };
+    let stt: Transcript;
     try {
       stt = await this.transcribe(input.dubPath);
     } catch (err) {
-      return skipped(
+      return done(skipped(
         'language_detect',
         `Skipped: the speech recognition service could not be reached, so the spoken language was not verified (${describe(err)}).`,
         { reason: 'provider_unreachable' },
-      );
+      ));
     }
 
     // Both sides in one form: the speech service answers "spa", jobs say "es".
@@ -200,43 +324,43 @@ export class QcService {
     const confidence = stt.language_probability;
 
     if (heard !== want) {
-      return {
+      return done({
         name: 'language_detect',
         passed: false,
         status: 'failed',
         detail: `The dub sounds like ${languageName(heard)}, not the ${languageName(want)} that was ordered.`,
         measured: { detected: heard, expected: want, confidence },
-      };
+      }, stt);
     }
     if (confidence < QC_MIN_LANGUAGE_CONFIDENCE) {
-      return {
+      return done({
         name: 'language_detect',
         passed: false,
         status: 'failed',
         detail: `The dub is only ${formatPercent(confidence)} likely to be ${languageName(want)}, below the ${formatPercent(QC_MIN_LANGUAGE_CONFIDENCE)} we require.`,
         measured: { detected: heard, expected: want, confidence },
-      };
+      }, stt);
     }
-    return {
+    return done({
       name: 'language_detect',
       passed: true,
       status: 'passed',
       detail: `The dub is ${languageName(want)} with ${formatPercent(confidence)} confidence.`,
       measured: { detected: heard, expected: want, confidence },
-    };
+    }, stt);
   }
 
   /**
    * POST /v1/speech-to-text. `language_code` is deliberately NOT sent: the
    * whole point of this check is that the service tells US what it hears.
    */
-  private async transcribe(
-    filePath: string,
-  ): Promise<{ language_code: string; language_probability: number; text: string }> {
+  private async transcribe(filePath: string): Promise<Transcript> {
     const apiKey = getConfig().env.ELEVENLABS_API_KEY;
     if (apiKey === undefined) throw new Error('no speech recognition credentials');
 
-    const bytes = await readFile(filePath);
+    const bytes = /^https?:\/\//.test(filePath)
+      ? await this.download(filePath)
+      : await readFile(filePath);
     const form = new FormData();
     form.set('model_id', getConfig().env.ELEVENLABS_STT_MODEL);
     form.set(
@@ -275,6 +399,15 @@ export class QcService {
       return first;
     }
     return parsed.data;
+  }
+
+  /** Fetch a remote original clip, capped so a huge file cannot stall QC. */
+  private async download(url: string): Promise<Uint8Array> {
+    const res = await this.fetchImpl(url, { signal: AbortSignal.timeout(this.requestTimeoutMs) });
+    if (!res.ok) throw new Error(`the original clip returned ${res.status}`);
+    const buf = new Uint8Array(await res.arrayBuffer());
+    if (buf.byteLength > 100 * 1024 * 1024) throw new Error('the original clip is over 100 MB');
+    return buf;
   }
 
   // -------------------------------------------------------------------------
@@ -381,18 +514,6 @@ export class QcService {
     };
   }
 
-  // -------------------------------------------------------------------------
-  // 4. back_translation
-  // -------------------------------------------------------------------------
-
-  /** Deliberately not built. Named on the cut list so nobody claims it ran. */
-  checkBackTranslation(): QcCheckResult {
-    return skipped(
-      'back_translation',
-      'Skipped: meaning-preservation checking is not built yet, so the wording was not compared against the original.',
-      { reason: 'not_implemented' },
-    );
-  }
 }
 
 // ---------------------------------------------------------------------------

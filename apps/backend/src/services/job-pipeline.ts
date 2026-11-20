@@ -39,7 +39,7 @@ import type { Job, Agent } from '../store/types.js';
 import { DecisionService, estimateDubCost, type DecisionOutcome } from './decision-service.js';
 import { PaymentService } from './payment-service.js';
 import { agentPrivateKey, getConfig } from '../config.js';
-import { recordAuctionOnchain } from '../chain/splitter.js';
+import { recordAuctionOnchain, recordQcOnchain } from '../chain/splitter.js';
 import { collectExternalBids } from './external-bids.js';
 
 export interface PipelineHooks {
@@ -70,6 +70,10 @@ export interface QcPort {
     targetLang: string;
     /** Demo determinism: force this dub to fail the gate. */
     forceFail?: boolean;
+    /** The original clip, for the meaning (back-translation) check. */
+    sourceUrl?: string;
+    /** Who made the dub, so the report can show the judge is someone else. */
+    dubProvider?: string;
   }): Promise<QcReport>;
 }
 
@@ -342,6 +346,34 @@ export class JobPipeline {
     }
   }
 
+  /**
+   * Write the QC verdict to the contract, next to this job's auction. Best
+   * effort, like the auction record: only for jobs whose auction is on-chain,
+   * and a chain hiccup never blocks publishing.
+   */
+  private async recordQcOnchain(job: Job, report: QcReport): Promise<string | null> {
+    const operatorKey = getConfig().env.PARROT_REVENUE_PRIVATE_KEY;
+    const splitter = getConfig().env.SPLITTER_ADDRESS;
+    const onchain = this.store.eventsForJob(job.id).some((e) => e.type === 'APPROVED' && e.txHash !== null);
+    if (!operatorKey || !splitter || !onchain) return null;
+    const meaning = report.checks.find((c) => c.name === 'back_translation');
+    const score = meaning?.measured?.['meaningScore'];
+    try {
+      return await recordQcOnchain({
+        operatorKey: operatorKey as `0x${string}`,
+        splitter: splitter as `0x${string}`,
+        jobId: job.id,
+        passed: report.passed,
+        meaningScore: typeof score === 'number' ? score : null,
+        report,
+      });
+    } catch (error: unknown) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`[pipeline] job ${job.id}: recording QC on-chain failed - ${detail}`);
+      return null;
+    }
+  }
+
   /** APPROVED -> DUBBING -> QC. The agent pays before it knows if it worked. */
   private async produceDub(job: Job): Promise<Job> {
     const agent = job.claimedByAgentId ? this.store.agents.get(job.claimedByAgentId) : undefined;
@@ -410,7 +442,13 @@ export class JobPipeline {
       dubDurationS: job.durationS,
       targetLang: job.targetLang,
       forceFail: job.qcDemoFail,
+      sourceUrl: job.sourceUrl,
+      dubProvider: 'ElevenLabs',
     });
+
+    // The verdict goes on-chain next to the auction: the agent's public,
+    // uneditable track record.
+    const qcTx = await this.recordQcOnchain(job, report);
 
     if (!report.passed) {
       const failed = report.checks.filter((c) => !c.passed);
@@ -424,6 +462,7 @@ export class JobPipeline {
         'QC_FAILED',
         { qcReport: report },
         { failed: report.checks.filter((c) => !c.passed).map((c) => c.name) },
+        qcTx,
       );
     }
 
@@ -432,6 +471,7 @@ export class JobPipeline {
       'QC_PASSED',
       { qcReport: report, publishedAt: new Date() },
       { previewSeconds: PREVIEW_SECONDS },
+      qcTx,
     );
   }
 

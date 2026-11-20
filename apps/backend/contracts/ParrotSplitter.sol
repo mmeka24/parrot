@@ -16,6 +16,9 @@ interface IERC20 {
  *    straight to the creator and the winning agent, at the share the auction
  *    set. Nobody holds the money in between, and the split cannot be changed
  *    after the auction (terms are write-once).
+ * 3. recordQc: the independent quality check's verdict on the winning agent's
+ *    dub, once per job. Each agent's passed / failed count is public and can
+ *    never be edited - an on-chain reputation.
  */
 contract ParrotSplitter {
     IERC20 public immutable usdc;
@@ -29,6 +32,15 @@ contract ParrotSplitter {
 
     mapping(bytes32 => Terms) public terms;
     mapping(bytes32 => bool) public unlockPaid;
+
+    struct Reputation {
+        uint32 passed;
+        uint32 failed;
+    }
+
+    /// Every agent's QC track record, keyed by the wallet the auction recorded.
+    mapping(address => Reputation) public reputation;
+    mapping(bytes32 => bool) public qcRecorded;
 
     event AuctionRecorded(
         bytes32 indexed jobId,
@@ -44,6 +56,15 @@ contract ParrotSplitter {
         address indexed payer,
         uint256 creatorAmount,
         uint256 agentAmount
+    );
+
+    /// meaningScore is 0-100 from the back-translation check, 255 if not measured.
+    event QcRecorded(
+        bytes32 indexed jobId,
+        address indexed agent,
+        bool passed,
+        uint8 meaningScore,
+        bytes32 reportHash
     );
 
     constructor(IERC20 usdc_) {
@@ -65,6 +86,18 @@ contract ParrotSplitter {
         require(agentBps <= 10_000, "bps");
         terms[jobId] = Terms(creator, agent, agentBps);
         emit AuctionRecorded(jobId, agent, creator, agentBps, bidders, decisionsHash);
+    }
+
+    function recordQc(bytes32 jobId, bool passed, uint8 meaningScore, bytes32 reportHash) external {
+        require(msg.sender == operator, "not operator");
+        Terms memory t = terms[jobId];
+        require(t.creator != address(0), "no auction for job");
+        require(!qcRecorded[jobId], "qc is final");
+        require(meaningScore <= 100 || meaningScore == 255, "score");
+        qcRecorded[jobId] = true;
+        if (passed) reputation[t.agent].passed += 1;
+        else reputation[t.agent].failed += 1;
+        emit QcRecorded(jobId, t.agent, passed, meaningScore, reportHash);
     }
 
     function unlock(bytes32 jobId, bytes32 unlockId, uint256 amount) external {

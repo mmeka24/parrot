@@ -22,14 +22,15 @@ than a smaller honest one.
 
 | Subsystem | Status in this repo |
 | --- | --- |
-| Money maths, split, ledger, EV model, state machine | **Real.** 510 tests. |
+| Money maths, split, ledger, EV model, state machine | **Real.** 517 tests. |
 | Decision loop, competing agent personas, learning loop | **Real.** Runs on every job. Cold-start funnel sourced and calibrated on 31 real X posts. |
 | Sealed-bid agent auction | **Real.** Runs on every job: the lowest bid for the agent's revenue share wins, and the winner gets exactly what it bid. Tested, and checked in a 400-job simulation. |
 | Open agent registration (`POST /api/agents/register`) | **Real.** Run live through the public deploy. Third-party bid endpoints (`bidUrl`) are tested against fakes; no outside agent has bid live yet. |
-| `ParrotSplitter` smart contract | **Real, deployed on Arc testnet** at [`0xafe91baf2789e79c764313326c6a3125a968856d`](https://explorer.testnet.arc.io/address/0xafe91baf2789e79c764313326c6a3125a968856d) and run end to end (2026-11-20): two auctions recorded on-chain, and a live $0.02 unlock split by the contract in one transaction, 29.5% to the winning agent and 70.5% held for the creator. Also tested on a local chain. Without `SPLITTER_ADDRESS` the app uses the transfer path in *Money flows*, unchanged. |
+| `ParrotSplitter` smart contract | **Real, deployed on Arc testnet** at [`0x1699adb8f1495eb9bdb1529d03db784cd424ad6d`](https://explorer.testnet.arc.io/address/0x1699adb8f1495eb9bdb1529d03db784cd424ad6d) and run end to end (2026-11-20): auctions and QC verdicts recorded on-chain, and (on the first version, below) a live $0.02 unlock split by the contract in one transaction, 29.5% to the winning agent and 70.5% held for the creator. Also tested on a local chain. Without `SPLITTER_ADDRESS` the app uses the transfer path in *Money flows*, unchanged. |
 | Viewer unlock payment | **Real, on Arc testnet.** 0.02 USDC transfer per unlock, verified on the explorer. |
 | x402 / Circle Gateway integration | **Written against the real SDK, not wired to the unlock route.** See Money flows. |
 | On-chain USDC settlement on Arc | **Real, broadcast on Arc testnet.** Agent payouts and dub costs verified on the explorer. |
+| Independent QC judge + meaning check | **Real, tested; not yet run on a real dub.** ElevenLabs makes the dub and Scribe only transcribes; the verdict on language and meaning comes from Grok (xAI). The back-translation meaning check needs a clip with real audio, which the seeded demo posts do not have, so on them it reports `skipped`. |
 | ElevenLabs dubbing + Scribe STT QC | **Real, run live once (2026-11-19).** A 12.5s English clip was dubbed to Spanish in 9s; QC heard Spanish at 98.6% and passed it. That first live run found two bugs the mocks hid, both fixed and now tested: uploads were labelled `application/octet-stream` (rejected with HTTP 400), and speech-to-text answers `spa` where jobs say `es`, so every correct dub failed QC. |
 | QuickNode Streams webhook + filter | **Unit-tested offline, not connected.** Nothing in the running server creates the stream or mounts the webhook yet, and it has never received a live delivery. |
 | X API | **Written, never called.** The demo runs on Chirp, a local stand-in for X. |
@@ -57,6 +58,11 @@ pretends to be real.
   the agent in one transaction.
 - **More conservative funnel assumptions**: reach 50% to 35%, dub uptake 5% to 2%. A
   1.2M-view post now forecasts about 680 Spanish dub viewers instead of about 2,400.
+- **QC is judged by someone other than the dubber.** ElevenLabs makes every dub, so it
+  no longer grades its own work: Scribe only transcribes, and Grok (xAI) decides the
+  language and runs a new **meaning check** (back-translation, score 0-100, 70 to pass).
+- **QC verdicts go on-chain.** `recordQc` writes pass/fail and the meaning score next to
+  the auction, once per job, and keeps each agent's public passed/failed count.
 - **Tooling**: `npm run deploy:splitter` deploys the contract; `npx tsx
   src/scripts/wallet-balances.ts` (in `apps/backend`) prints each wallet's address and
   Arc balance without printing keys. The media-fetcher test now passes on Windows.
@@ -387,17 +393,32 @@ time is charted. In demo mode outcomes are simulated and every such record is fl
 
 ## The QC gate, and its limits
 
-Before publishing: **duration match** within 10%; **language detection** via ElevenLabs
-Scribe on the dub itself, which must report the target language above a confidence floor;
-**audio sanity** via ffmpeg (non-silence ratio, dead gaps, loudness). Back-translation was
-on the cut list and is **not implemented**.
+Before publishing, four checks:
+
+- **Duration match** within 10%.
+- **Language**: the dub is in the language that was ordered.
+- **Audio sanity** via ffmpeg (non-silence ratio, dead gaps, loudness).
+- **Meaning (back-translation)**: both the original and the dub are transcribed, the dub
+  is translated back to English, and it is scored 0-100 on whether it says the same
+  thing. 70 or more to pass.
+
+**The company that made a dub never judges it.** ElevenLabs makes every dub today, so
+ElevenLabs Scribe is only used to *transcribe* (write down what is said). The verdict on
+language and meaning comes from **Grok (xAI)**, which dubs nothing. Without an xAI key,
+language falls back to Scribe's own language ID and the meaning check reports `skipped`.
+
+**The verdict goes on-chain** (`recordQc`), next to the job's auction record: pass/fail,
+the meaning score (255 = not measured) and a hash of the full report. The contract keeps
+every agent's passed/failed count, publicly and uneditably, as its reputation.
 
 A failure means the dub is **not published**, the cost stays booked as a loss, the agent's
 `p_success` drops, and the bot tells the creator the truth rather than handing them
 something bad.
 
-**Limits, honestly:** this checks that a dub is *plausibly the right language and not
-broken*. It does not check that the translation is *good*. ffmpeg is not installed here,
+**Limits, honestly:** the meaning check judges transcripts, so it cannot hear tone,
+timing or lip sync, and it needs the original clip's audio (seeded demo posts have none,
+so there it is skipped). It has passed its tests but has not yet run on a real dub.
+ffmpeg is not installed here,
 so the audio check reports `status: 'skipped'` — a tri-state `status` field exists
 precisely because reading a boolean `passed` would make a check that never ran look like
 one that succeeded.
@@ -423,7 +444,7 @@ backend is down, every page falls back to built-in sample data.
 credentials appear.
 
 ```bash
-npm test                 # 510 tests (includes the contract, on an in-memory chain)
+npm test                 # 517 tests (includes the contract, on an in-memory chain)
 npm run typecheck
 ```
 
@@ -538,7 +559,16 @@ settlements update live. `POST /api/demo/learn` compresses the 24-hour learning 
 | Gateway facilitator (testnet) | `https://gateway-api-testnet.circle.com` |
 
 Parrot's one custom contract, `ParrotSplitter` (`apps/backend/contracts/`), is deployed
-at **[`0xafe91baf2789e79c764313326c6a3125a968856d`](https://explorer.testnet.arc.io/address/0xafe91baf2789e79c764313326c6a3125a968856d)**:
+at **[`0x1699adb8f1495eb9bdb1529d03db784cd424ad6d`](https://explorer.testnet.arc.io/address/0x1699adb8f1495eb9bdb1529d03db784cd424ad6d)** (current version, adds `recordQc`):
+
+| Event | Transaction |
+| --- | --- |
+| Deploy | [`0x5493ad40…bb39`](https://explorer.testnet.arc.io/tx/0x5493ad408284bc64e4cc6b5d16b90ccb98518d0389506f8b30c52d1b2befbb39) |
+| Viewer pool approves the contract | [`0x34b1e053…f0c4`](https://explorer.testnet.arc.io/tx/0x34b1e0538dd69320e483fb0a0137b3889df73fe4dfd0efd31307c19a03caf0c4) |
+| Auction recorded | [`0xb059128d…bc99`](https://explorer.testnet.arc.io/tx/0xb059128dea2624864e0747c20386407942685b9ca91ad7874bc0fa6e91eabc99), [`0x75449b7e…af8f`](https://explorer.testnet.arc.io/tx/0x75449b7ed7f40b14573a967c6986fd3d24db80aae0ca82ce62699b9c4fccaf8f) |
+| QC recorded (one pass, one staged fail) | [`0xed19cfa9…1021`](https://explorer.testnet.arc.io/tx/0xed19cfa9a072d56b874adf6ded2f4acb8f106f15517d70652ee642b9ff6e1021), [`0xd189785a…f4c8`](https://explorer.testnet.arc.io/tx/0xd189785a76f751e36e479f0bded63d11d225f8139e246b49e017be057938f4c8) |
+
+The first version, still on-chain, at [`0xafe91baf2789e79c764313326c6a3125a968856d`](https://explorer.testnet.arc.io/address/0xafe91baf2789e79c764313326c6a3125a968856d):
 
 | Event | Transaction |
 | --- | --- |

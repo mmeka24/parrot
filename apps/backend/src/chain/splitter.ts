@@ -30,6 +30,28 @@ export const SPLITTER_ABI = [
   },
   {
     type: 'function',
+    name: 'recordQc',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'jobId', type: 'bytes32' },
+      { name: 'passed', type: 'bool' },
+      { name: 'meaningScore', type: 'uint8' },
+      { name: 'reportHash', type: 'bytes32' },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    name: 'reputation',
+    stateMutability: 'view',
+    inputs: [{ name: 'agent', type: 'address' }],
+    outputs: [
+      { name: 'passed', type: 'uint32' },
+      { name: 'failed', type: 'uint32' },
+    ],
+  },
+  {
+    type: 'function',
     name: 'unlock',
     stateMutability: 'nonpayable',
     inputs: [
@@ -54,7 +76,7 @@ export function hashDecisions(decisions: unknown): Hex {
 async function send(
   privateKey: Hex,
   splitter: Address,
-  functionName: 'recordAuction' | 'unlock',
+  functionName: 'recordAuction' | 'unlock' | 'recordQc',
   args: readonly unknown[],
 ): Promise<Hex> {
   const publicClient = getPublicClient();
@@ -109,5 +131,24 @@ export function splitUnlockOnchain(input: {
     idToBytes32(input.jobId),
     idToBytes32(input.unlockKey),
     microsToErc20Units(input.amount),
+  ]);
+}
+
+/** The QC verdict on a job's dub, written next to its auction record. */
+export function recordQcOnchain(input: {
+  operatorKey: Hex;
+  splitter: Address;
+  jobId: string;
+  passed: boolean;
+  /** 0-100, or null when the meaning check did not run. */
+  meaningScore: number | null;
+  report: unknown;
+}): Promise<Hex> {
+  const score = input.meaningScore === null ? 255 : Math.max(0, Math.min(100, Math.round(input.meaningScore)));
+  return send(input.operatorKey, input.splitter, 'recordQc', [
+    idToBytes32(input.jobId),
+    input.passed,
+    score,
+    hashDecisions(input.report),
   ]);
 }

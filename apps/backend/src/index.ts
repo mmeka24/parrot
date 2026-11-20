@@ -119,9 +119,9 @@ function dubbingPort(
  * was staged rather than observed - staging a demo is fine, pretending it was
  * observed is not.
  */
-function qcPort(service: QcService): QcPort {
+function qcPort(service: QcService, resolveSource: (sourceUrl: string) => SourceMedia): QcPort {
   return {
-    async run({ dubPath, sourceDurationS, dubDurationS, targetLang, forceFail }) {
+    async run({ dubPath, sourceDurationS, dubDurationS, targetLang, forceFail, sourceUrl, dubProvider }) {
       if (forceFail) {
         const report: QcReport = {
           passed: false,
@@ -156,9 +156,26 @@ function qcPort(service: QcService): QcPort {
         // against the source would fail duration_match for the wrong reason.
         dubDurationS: dubDurationS || sourceDurationS,
         targetLang,
+        sourcePath: sourceUrl ? qcSourcePath(sourceUrl, resolveSource) : undefined,
+        dubProvider,
       });
     },
   };
+}
+
+/**
+ * Where QC can read the original clip, for the meaning check: an uploaded
+ * file, or a real public link. Seeded posts have no media; an x.com page is
+ * not media itself, so both skip the check (and say so).
+ */
+function qcSourcePath(
+  sourceUrl: string,
+  resolveSource: (sourceUrl: string) => SourceMedia,
+): string | undefined {
+  const source = resolveSource(sourceUrl);
+  if (source.kind === 'file') return source.path;
+  if (source.kind === 'remote' && /^https:\/\//.test(sourceUrl)) return sourceUrl;
+  return undefined;
 }
 
 /** Pick a rough category from the post text. A real system would use the LLM. */
@@ -213,7 +230,7 @@ async function main(): Promise<void> {
     decisions,
     payments,
     dubbingPort(dubbing, resolveSource, new MediaFetcher()),
-    qcPort(qc),
+    qcPort(qc, resolveSource),
     {
       onTransition: (job, event) => {
         hub.broadcast({ type: 'job', jobId: job.id, state: job.state });

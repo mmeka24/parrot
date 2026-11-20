@@ -318,6 +318,11 @@ export const PREVIEW_SECONDS = 8;
 export const QC_DURATION_TOLERANCE = 0.1;
 /** ElevenLabs STT must report the target language with at least this confidence. */
 export const QC_MIN_LANGUAGE_CONFIDENCE = 0.6;
+/**
+ * Back-translation: the independent judge's 0-100 score for how well the dub
+ * keeps the original's meaning must reach this. 70 = "minor losses at most".
+ */
+export const QC_MIN_MEANING_SCORE = 70;
 /** At least this fraction of the dub must be non-silent. */
 export const QC_MIN_NON_SILENCE_RATIO = 0.5;
 /** Longest acceptable dead gap, in seconds. */

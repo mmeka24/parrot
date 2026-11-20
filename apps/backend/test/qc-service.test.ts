@@ -381,12 +381,98 @@ describe('QcService - audio_sanity', () => {
 
 // ---------------------------------------------------------------------------
 
-describe('QcService - back_translation', () => {
-  it('is reported as not implemented, never as a pass', () => {
-    const check = new QcService().checkBackTranslation();
-    expect(check.status).toBe('skipped');
-    expect(check.measured?.reason).toBe('not_implemented');
-    expect(check.detail).toMatch(/^Skipped:/);
+describe('QcService - back_translation (the independent judge)', () => {
+  /**
+   * Routes by URL: speech-to-text answers for the transcriber, chat
+   * completions for the judge. The judge never sees an ElevenLabs URL.
+   */
+  function routedFetch(opts: { dubText: string; sourceText: string; verdict: unknown }) {
+    const calls: string[] = [];
+    let stt = 0;
+    const impl = async (url: string): Promise<Response> => {
+      calls.push(url);
+      if (url.includes('speech-to-text')) {
+        stt++;
+        // First transcription is the dub, second the original.
+        const text = stt === 1 ? opts.dubText : opts.sourceText;
+        const lang = stt === 1 ? 'es' : 'en';
+        return new Response(JSON.stringify({ language_code: lang, language_probability: 0.97, text }), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: JSON.stringify(opts.verdict) } }] }),
+        { status: 200 },
+      );
+    };
+    return { impl, calls };
+  }
+
+  function judgeEnv(): void {
+    sttEnv(true);
+    process.env.XAI_API_KEY = 'xai-test';
+    resetConfig();
+  }
+
+  afterEach(() => {
+    delete process.env.XAI_API_KEY;
+    resetConfig();
+  });
+
+  it('is SKIPPED, never passed, when no judge is configured', async () => {
+    sttEnv(true);
+    const fetchImpl = sttFetch({ language_code: 'es', language_probability: 0.95, text: 'hola' });
+    const report = await new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing }).run({
+      dubPath: GOOD_DUB, sourceDurationS: 60, dubDurationS: 60, targetLang: 'es', sourcePath: GOOD_DUB,
+    });
+    expect(find(report, 'back_translation').status).toBe('skipped');
+    expect(find(report, 'back_translation').measured?.reason).toBe('no_judge');
+  });
+
+  it('passes a faithful dub, and the judge - not the dubber - decides the language', async () => {
+    judgeEnv();
+    const f = routedFetch({
+      dubText: 'Hola a todos, hoy cocinamos pasta.',
+      sourceText: 'Hi everyone, today we are cooking pasta.',
+      verdict: { language: 'es', backTranslation: 'Hello everyone, today we cook pasta.', meaningScore: 94, reason: 'Same message.' },
+    });
+    const report = await new QcService({ fetchImpl: f.impl, runFfmpeg: ffmpegMissing }).run({
+      dubPath: GOOD_DUB, sourceDurationS: 60, dubDurationS: 60, targetLang: 'es',
+      sourcePath: GOOD_DUB, dubProvider: 'ElevenLabs',
+    });
+    expect(report.passed).toBe(true);
+    expect(find(report, 'back_translation').measured?.meaningScore).toBe(94);
+    expect(find(report, 'language_detect').detail).toMatch(/judged by Grok \(xAI\), independent of ElevenLabs/);
+    expect(f.calls.some((u) => u.includes('chat/completions'))).toBe(true);
+    expect(qcReportSchema.safeParse(report).success).toBe(true);
+  });
+
+  it('fails a dub in the right language that says something else', async () => {
+    judgeEnv();
+    const f = routedFetch({
+      dubText: 'Compra mi curso ahora.',
+      sourceText: 'Hi everyone, today we are cooking pasta.',
+      verdict: { language: 'es', backTranslation: 'Buy my course now.', meaningScore: 12, reason: 'A different message.' },
+    });
+    const report = await new QcService({ fetchImpl: f.impl, runFfmpeg: ffmpegMissing }).run({
+      dubPath: GOOD_DUB, sourceDurationS: 60, dubDurationS: 60, targetLang: 'es', sourcePath: GOOD_DUB,
+    });
+    expect(report.passed).toBe(false);
+    expect(find(report, 'back_translation').status).toBe('failed');
+    expect(find(report, 'language_detect').status).toBe('passed');
+  });
+
+  it('fails when the judge hears a different language than the transcriber claimed', async () => {
+    judgeEnv();
+    const f = routedFetch({
+      dubText: 'Ola a todos, hoje cozinhamos massa.',
+      sourceText: 'Hi everyone, today we are cooking pasta.',
+      verdict: { language: 'pt', backTranslation: 'Hello everyone, today we cook pasta.', meaningScore: 93, reason: 'Same message, in Portuguese.' },
+    });
+    const report = await new QcService({ fetchImpl: f.impl, runFfmpeg: ffmpegMissing }).run({
+      dubPath: GOOD_DUB, sourceDurationS: 60, dubDurationS: 60, targetLang: 'es', sourcePath: GOOD_DUB,
+    });
+    expect(report.passed).toBe(false);
+    expect(find(report, 'language_detect').status).toBe('failed');
+    expect(find(report, 'language_detect').measured?.transcriberHeard).toBe('es');
   });
 });
 

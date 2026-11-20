@@ -104,6 +104,29 @@ describe('ParrotSplitter on a local chain', () => {
     ).rejects.toThrow(/already paid/);
   });
 
+  it('records the QC verdict once, and keeps a public reputation per agent', async () => {
+    await expect(
+      call(splitter, SPLITTER_ABI, 'recordQc', [job, true, 88, hashDecisions({ ok: 1 })], stranger),
+    ).rejects.toThrow(/not operator/);
+    await expect(
+      call(splitter, SPLITTER_ABI, 'recordQc', [idToBytes32('nope'), true, 88, hashDecisions({})], operator),
+    ).rejects.toThrow(/no auction/);
+
+    await call(splitter, SPLITTER_ABI, 'recordQc', [job, true, 88, hashDecisions({ ok: 1 })], operator);
+    await expect(
+      call(splitter, SPLITTER_ABI, 'recordQc', [job, false, 10, hashDecisions({})], operator),
+    ).rejects.toThrow(/qc is final/);
+
+    const job2 = idToBytes32('job-2');
+    await call(splitter, SPLITTER_ABI, 'recordAuction', [job2, creator, agent, 500, 2, hashDecisions([])], operator);
+    await call(splitter, SPLITTER_ABI, 'recordQc', [job2, false, 255, hashDecisions({ bad: 1 })], operator);
+
+    const [passed, failed] = (await pub.readContract({
+      address: splitter, abi: SPLITTER_ABI, functionName: 'reputation', args: [agent],
+    })) as readonly [number, number];
+    expect([passed, failed]).toEqual([1, 1]);
+  });
+
   it('terms are final: an auction result cannot be rewritten', async () => {
     await expect(
       call(splitter, SPLITTER_ABI, 'recordAuction', [job, creator, stranger, 9_000, 1, hashDecisions([])], operator),
