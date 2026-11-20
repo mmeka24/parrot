@@ -165,6 +165,25 @@ describe('QcService - language_detect', () => {
     );
   });
 
+  it('accepts the three-letter code Scribe actually returns ("spa" for Spanish)', async () => {
+    sttEnv(true);
+    // Seen live: a correct Spanish dub came back as "spa" at 0.96 and was
+    // wrongly rejected against the ordered "es".
+    const fetchImpl = sttFetch({ language_code: 'spa', language_probability: 0.96, text: 'hola' });
+    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing });
+    const check = await svc.checkLanguage(input);
+
+    expect(check.status).toBe('passed');
+    expect(check.measured?.detected).toBe('es');
+  });
+
+  it('still fails a three-letter code for the wrong language', async () => {
+    sttEnv(true);
+    const fetchImpl = sttFetch({ language_code: 'fra', language_probability: 0.96, text: 'bonjour' });
+    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing });
+    expect((await svc.checkLanguage(input)).status).toBe('failed');
+  });
+
   it('fails when the dub is in the wrong language', async () => {
     sttEnv(true);
     const fetchImpl = sttFetch({

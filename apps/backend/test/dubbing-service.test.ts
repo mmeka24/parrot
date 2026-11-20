@@ -365,3 +365,13 @@ describe('DubbingService - live mode (faked network)', () => {
     expect(svc.inFlight).toBe(0);
   });
 });
+
+describe('mediaTypeFor', () => {
+  it('names the media type ElevenLabs needs, never octet-stream', async () => {
+    const { mediaTypeFor } = await import('../src/services/dubbing-service.js');
+    expect(mediaTypeFor('/m/src_1.webm')).toBe('video/webm');
+    expect(mediaTypeFor('/m/src_1.MP4')).toBe('video/mp4');
+    expect(mediaTypeFor('/m/src_1.mov')).toBe('video/quicktime');
+    expect(mediaTypeFor('/m/no-extension')).toBe('video/mp4');
+  });
+});

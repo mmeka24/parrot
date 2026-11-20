@@ -130,6 +130,9 @@ export class JobPipeline {
   }
 
   private async fail(job: Job, reason: FailureReason, detail?: string): Promise<Job> {
+    // A failed job is otherwise silent: the viewer sees a generic apology and
+    // the reason lives only in the job's event log. Say it where we can see it.
+    console.error(`[pipeline] job ${job.id} failed: ${reason}${detail ? ` - ${detail}` : ''}`);
     return this.advance(job, 'FAILED', { failureReason: reason }, { reason, detail: detail ?? null });
   }
 
@@ -368,6 +371,10 @@ export class JobPipeline {
     });
 
     if (!report.passed) {
+      const failed = report.checks.filter((c) => !c.passed);
+      console.error(
+        `[pipeline] job ${job.id} failed QC: ${failed.map((c) => `${c.name} (${JSON.stringify(c)})`).join('; ')}`,
+      );
       // Not published, cost already booked as a loss, p_success falls, and the
       // creator is told the truth rather than handed a bad dub.
       return this.advance(

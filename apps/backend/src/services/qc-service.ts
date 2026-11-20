@@ -193,8 +193,10 @@ export class QcService {
       );
     }
 
-    const heard = stt.language_code.toLowerCase().split(/[-_]/)[0] ?? '';
-    const want = input.targetLang.toLowerCase().split(/[-_]/)[0] ?? '';
+    // Scribe answers in ISO 639-3 ("spa"); jobs are ordered in ISO 639-1
+    // ("es"). Compare like with like, or every real dub fails this check.
+    const heard = toIso6391(stt.language_code.toLowerCase().split(/[-_]/)[0] ?? '');
+    const want = toIso6391(input.targetLang.toLowerCase().split(/[-_]/)[0] ?? '');
     const confidence = stt.language_probability;
 
     if (heard !== want) {
@@ -525,4 +527,19 @@ async function defaultFfmpegRunner(bin: string, args: string[]): Promise<FfmpegR
       res({ code: code ?? 0, stderr });
     });
   });
+}
+
+/**
+ * ISO 639-3 (and the old 639-2/B bibliographic forms) to ISO 639-1, for the
+ * languages Parrot offers. Anything already two letters, or unknown, passes
+ * through unchanged.
+ */
+const ISO_639_3_TO_1: Record<string, string> = {
+  spa: 'es', por: 'pt', hin: 'hi', fra: 'fr', fre: 'fr', deu: 'de', ger: 'de',
+  jpn: 'ja', kor: 'ko', ara: 'ar', ind: 'id', eng: 'en', ita: 'it', zho: 'zh',
+  chi: 'zh', rus: 'ru', tur: 'tr', nld: 'nl', dut: 'nl', pol: 'pl',
+};
+
+export function toIso6391(code: string): string {
+  return ISO_639_3_TO_1[code] ?? code;
 }

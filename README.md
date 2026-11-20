@@ -21,12 +21,12 @@ than a smaller honest one.
 
 | Subsystem | Status in this repo |
 | --- | --- |
-| Money maths, split, ledger, EV model, state machine | **Real.** 468 tests. |
+| Money maths, split, ledger, EV model, state machine | **Real.** 471 tests. |
 | Decision loop, competing agent personas, learning loop | **Real.** Runs on every job. Cold-start funnel sourced and calibrated on 31 real X posts. |
 | Viewer unlock payment | **Real, on Arc testnet.** 0.02 USDC transfer per unlock, verified on the explorer. |
 | x402 / Circle Gateway integration | **Written against the real SDK, not wired to the unlock route.** See Money flows. |
 | On-chain USDC settlement on Arc | **Real, broadcast on Arc testnet.** Agent payouts and dub costs verified on the explorer. |
-| ElevenLabs dubbing + Scribe STT QC | **Real API, called with a live key.** Seeded posts still use stand-in audio. |
+| ElevenLabs dubbing + Scribe STT QC | **Real, run end to end.** An uploaded clip was dubbed into Spanish and passed QC (97% Spanish). Seeded posts still use stand-in audio. |
 | QuickNode Streams webhook + filter | **Real, unit-tested offline.** Never received a live delivery. |
 | X API | **Written, never called.** The demo runs on Chirp, a local stand-in for X. |
 | Browser extension | **Real, run end to end against Chirp** in Chromium. Never run on x.com. |

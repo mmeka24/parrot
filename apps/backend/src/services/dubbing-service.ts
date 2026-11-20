@@ -337,7 +337,9 @@ export class DubbingService {
       const bytes = await readFile(input.filePath);
       form.set(
         'file',
-        new Blob([new Uint8Array(bytes)], { type: 'application/octet-stream' }),
+        // ElevenLabs rejects 'application/octet-stream' (400 invalid_file_type),
+        // so the part must say what kind of media it is.
+        new Blob([new Uint8Array(bytes)], { type: mediaTypeFor(input.filePath) }),
         basename(input.filePath),
       );
     }
@@ -640,4 +642,19 @@ export function silentWav(seconds: number, sampleRate = 8_000): Buffer {
   header.write('data', 36);
   header.writeUInt32LE(data.length, 40);
   return Buffer.concat([header, data]);
+}
+
+/** The media type ElevenLabs needs on an uploaded source file, from its extension. */
+export function mediaTypeFor(filePath: string): string {
+  const ext = filePath.toLowerCase().split('.').pop() ?? '';
+  const types: Record<string, string> = {
+    mp4: 'video/mp4',
+    m4v: 'video/mp4',
+    webm: 'video/webm',
+    mov: 'video/quicktime',
+    mp3: 'audio/mpeg',
+    wav: 'audio/wav',
+    m4a: 'audio/mp4',
+  };
+  return types[ext] ?? 'video/mp4';
 }

@@ -22,10 +22,26 @@ function probeDuration(file: File): Promise<number> {
     const url = URL.createObjectURL(file);
     const video = document.createElement('video');
     video.preload = 'metadata';
-    video.onloadedmetadata = () => {
+    const done = () => {
       URL.revokeObjectURL(url);
       if (Number.isFinite(video.duration) && video.duration > 0) resolve(video.duration);
       else reject(new Error('unreadable'));
+    };
+    video.onloadedmetadata = () => {
+      // WebM written by a browser's MediaRecorder (screen and webcam captures)
+      // has no duration in its header, so it reports Infinity. Seeking past the
+      // end makes the browser scan the file and report the real length.
+      if (video.duration === Infinity) {
+        video.ondurationchange = () => {
+          if (Number.isFinite(video.duration)) {
+            video.ondurationchange = null;
+            done();
+          }
+        };
+        video.currentTime = Number.MAX_SAFE_INTEGER;
+        return;
+      }
+      done();
     };
     video.onerror = () => {
       URL.revokeObjectURL(url);
