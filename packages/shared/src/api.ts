@@ -633,6 +633,8 @@ export interface ExtensionForecastDto {
     readonly code: string;
     readonly name: string;
     readonly flag: string;
+    /** This language's share of X's audience, as a percentage with one decimal ("8.1"). */
+    readonly sharePercent: string;
     readonly roleLabel: string;
     /** 'learned': from the creator's own earlier posts. 'estimate': from public figures. */
     readonly source: 'learned' | 'estimate';
@@ -657,6 +659,26 @@ export interface ExtensionForecastDto {
     readonly youPay: MoneyDto;
     readonly worth: MoneyDto;
     readonly net: MoneyDto;
+  };
+  /** The funnel, spelled out, so it can be shown beside the numbers it produced. */
+  readonly funnel: {
+    /** Share of a market that sees an English post (an assumption), whole percent. */
+    readonly reachPercent: number;
+    /** Share of those who watch the dub (an assumption), whole percent. */
+    readonly uptakePercent: number;
+    /** A worked example, always Spanish on the take-off video. */
+    readonly example: {
+      readonly name: string;
+      readonly sharePercent: string;
+      readonly originalViews: number;
+      /** Rounded to the nearest 10. */
+      readonly dubViews: number;
+      /** What those views would cost the creator. */
+      readonly youPay: MoneyDto;
+    };
+    /** What ONE dub costs Parrot to make, and the views it needs to be covered. */
+    readonly dubCostEach: MoneyDto;
+    readonly breakEvenViews: number;
   };
   /** Where the numbers come from, in one sentence. */
   readonly basis: string;

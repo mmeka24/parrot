@@ -17,7 +17,10 @@ import {
   USDC_ADDRESS,
   addPnl,
   addressUrl,
+  DUB_UPTAKE,
+  MARKET_REACH,
   TAKE_OFF_VIEWS,
+  X_AD_REACH_MILLIONS,
   breakEvenViews,
   copy,
   estimateDubCost,
@@ -593,6 +596,12 @@ export function extensionResults(input: {
 // GET /api/extension/forecast
 // ---------------------------------------------------------------------------
 
+/** A language's share of X's audience as a percentage with one decimal: 35M of 433M is "8.1". */
+export function sharePercentOf(lang: string): string {
+  const millions = languageByCode(lang)?.xAudienceMillions ?? 0;
+  return ((millions / X_AD_REACH_MILLIONS) * 100).toFixed(1);
+}
+
 export function extensionForecast(input: {
   readonly creator: Creator;
   readonly plan: LanguagePlan;
@@ -633,6 +642,7 @@ export function extensionForecast(input: {
       code: entry.lang,
       name: languageRef(entry.lang).name,
       flag: languageRef(entry.lang).flag,
+      sharePercent: sharePercentOf(entry.lang),
       roleLabel: ROLE_LABEL[entry.role],
       source: learned ? ('learned' as const) : ('estimate' as const),
       views,
@@ -649,6 +659,9 @@ export function extensionForecast(input: {
   const takeOffWorth = viewValue(takeOffViews, creator.valuePerThousand);
   const totalDubCost = micros((dubCost as bigint) * BigInt(plan.entries.length));
   const anyLearned = languages.some((l) => l.source === 'learned');
+
+  // The worked example, always Spanish on the take-off video: 1.2M x 8.1% x 35% x 2%.
+  const exampleViews = Math.round(forecastViews(TAKE_OFF_VIEWS, 'es').likely / 10) * 10;
 
   return {
     postId: input.postId,
@@ -677,6 +690,20 @@ export function extensionForecast(input: {
       youPay: money(takeOffPay),
       worth: money(takeOffWorth),
       net: money(micros((takeOffWorth as bigint) - (takeOffPay as bigint))),
+    },
+    funnel: {
+      reachPercent: Math.round(MARKET_REACH.likely * 100),
+      uptakePercent: Math.round(DUB_UPTAKE.likely * 100),
+      example: {
+        name: languageRef('es').name,
+        sharePercent: sharePercentOf('es'),
+        originalViews: TAKE_OFF_VIEWS,
+        dubViews: exampleViews,
+        youPay: money(expectedCharge(exampleViews, budget)),
+      },
+      // Three decimals: a 1:57 dub costs $0.975, and "$0.97" would be wrong.
+      dubCostEach: { micros: (dubCost as bigint).toString(), display: formatUsd(dubCost, { maxDecimals: 3 }) },
+      breakEvenViews: breakEvenViews(dubCost),
     },
     basis: anyLearned
       ? 'Languages Parrot has already measured use your own earlier results. The rest use X audience figures by language (DataReportal) and stated assumptions on reach and uptake.'

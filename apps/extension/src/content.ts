@@ -396,7 +396,8 @@ function draw(
   // Skip the redraw when nothing visible changed, so focus and hover survive
   // the poll.
   const numbers = results.get(postId);
-  const expected = status.dubs.length === 0 ? forecasts.get(postId) : undefined;
+  // Shown before dubbing, and kept while the dubs are being made, so it can be explained during the wait.
+  const expected = status.dubs.length === 0 || numbers?.working ? forecasts.get(postId) : undefined;
   const signature = JSON.stringify([
     numbers ?? null,
     expected ?? null,
@@ -509,7 +510,7 @@ function forecastPanel(f: ExtensionForecastDto): HTMLElement {
   rows.append(
     el('div', { class: 'frow' }, [
       el('span', { class: 'src' }, ['Language']),
-      el('span', { class: 'src' }, [t.forecastViewsHead]),
+      el('span', { class: 'src' }, [`${t.forecastColShare} · ${t.forecastViewsHead}`]),
       el('span', { class: 'src' }, [t.forecastPayHead]),
     ]),
   );
@@ -518,6 +519,7 @@ function forecastPanel(f: ExtensionForecastDto): HTMLElement {
       el('div', { class: 'frow' }, [
         el('span', { class: 'dname' }, [`${lang.flag} ${lang.name}`.trim()]),
         el('span', { class: 'frange' }, [
+          `${lang.sharePercent}% · `,
           range(lang.views.low, lang.views.high),
           ' ',
           el('small', {}, [
@@ -549,6 +551,21 @@ function forecastPanel(f: ExtensionForecastDto): HTMLElement {
       el('div', {}, [el('small', {}, [t.forecastTotalNet]), el('b', { class: net.startsWith('-') ? 'down' : 'up' }, [net])]),
     ]),
     el('p', { class: 'fine' }, [fill(t.forecastParrotPays, { amount: f.totals.dubCost.display })]),
+    el('p', { class: 'res-summary', style: 'margin-bottom:2px' }, [el('b', {}, [t.forecastHow])]),
+    el('p', { class: 'takeoff' }, [
+      fill(t.forecastFunnel, {
+        name: f.funnel.example.name,
+        share: f.funnel.example.sharePercent,
+        reach: String(f.funnel.reachPercent),
+        uptake: String(f.funnel.uptakePercent),
+        views: n0(f.funnel.example.originalViews),
+        dubViews: n0(f.funnel.example.dubViews),
+        pay: f.funnel.example.youPay.display,
+      }),
+    ]),
+    el('p', { class: 'fine' }, [
+      fill(t.forecastDubCost, { cost: f.funnel.dubCostEach.display, needed: n0(f.funnel.breakEvenViews) }),
+    ]),
     el('p', { class: 'takeoff' }, [
       fill(t.forecastTakeOff, {
         views: n0(f.takeOff.views),
@@ -562,6 +579,7 @@ function forecastPanel(f: ExtensionForecastDto): HTMLElement {
   if (f.valueIsDefault) {
     panel.append(el('p', { class: 'fine' }, [fill(t.forecastExampleRate, { rate: f.valuePerThousand.display })]));
   }
+  panel.append(el('p', { class: 'fine' }, [t.forecastAssumption]));
   panel.append(el('p', { class: 'fine' }, [f.basis]));
   return panel;
 }

@@ -200,6 +200,13 @@ export const copy = {
     forecastTotalWorth: 'Worth to you',
     forecastTotalNet: 'Net for you',
     forecastParrotPays: 'Parrot pays {amount} to make these dubs. You pay nothing if nobody watches.',
+    forecastColShare: 'Share of X',
+    forecastHow: 'How this is estimated',
+    forecastFunnel:
+      '{name}: {share}% of X speaks it, x {reach}% see an English post, x {uptake}% watch the dub. On {views} views that is about {dubViews} {name} views, so you would pay {pay}.',
+    forecastDubCost:
+      'One dub costs Parrot {cost} to make, so it needs {needed} views before what you pay covers it. One big language is not enough, which is why Parrot tries several.',
+    forecastAssumption: 'The reach and watch percentages are our assumptions, not measurements. Parrot replaces them with your real numbers after your first post.',
     forecastTakeOff: 'If it takes off to {views} views: about {dubViews} dub views, you pay {pay}, worth {worth}.',
     forecastCapNote: 'You never pay more than your {budget} budget for this post.',
     forecastExampleRate: 'Worth uses an example rate of {rate} per 1,000 views. Set yours in your dashboard.',
