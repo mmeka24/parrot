@@ -113,3 +113,71 @@ describe('forecast calibration', () => {
     expect(cal).toBe(100_000); // clamped at 0.1
   });
 });
+
+describe('competing on dub quality', () => {
+  it('a cheap agent whose dubs fail QC loses to a fair-priced agent whose dubs pass', () => {
+    const { store, registry, decisions } = setup();
+    const sloppy = registry.register({ name: 'Sloppy', minMarginUsd: '0.01', optimism: 'optimistic' });
+    const careful = registry.register({ name: 'Careful', minMarginUsd: '0.30' });
+    // Track records: Sloppy 1 pass in 4, Careful 4 for 4 with meaning kept.
+    const record = (agentId: string, state: string, meaningScore: number) => {
+      const j = viralJob(store);
+      store.updateJob(j.id, {
+        claimedByAgentId: agentId,
+        state: state as never,
+        qcReport: { passed: state === 'PUBLISHED', ranAt: new Date(), checks: [
+          { name: 'back_translation', passed: true, status: 'passed', detail: '', measured: { meaningScore } },
+        ] } as never,
+      });
+    };
+    for (let i = 0; i < 4; i++) record(careful.id, 'PUBLISHED', 95);
+    record(sloppy.id, 'PUBLISHED', 60);
+    for (let i = 0; i < 3; i++) record(sloppy.id, 'REJECTED_BY_QC', 30);
+
+    const outcome = decisions.runAuction(viralJob(store));
+    const bids = outcome.auction!.bids;
+    const sloppyBid = bids.find((b) => b.agentName === 'Sloppy')!;
+    const carefulBid = bids.find((b) => b.agentName === 'Careful')!;
+    expect(sloppyBid.bidBps).toBeLessThan(carefulBid.bidBps); // Sloppy is cheaper...
+    expect(outcome.winner?.name).toBe('Careful'); // ...but Careful is better value.
+    expect(carefulBid.qualityPercent).toBeGreaterThan(sloppyBid.qualityPercent);
+    expect(outcome.winningDecision?.rationale).toMatch(/quality record/);
+  });
+
+  it('an agent with its own dubber uses its own price in its maths', () => {
+    const { store, registry, decisions } = setup();
+    const own = registry.register({
+      name: 'Owl', dubUrl: 'https://dub.example/make', dubProvider: 'HeyGen', dubCostPerMinuteUsd: '0.20',
+    });
+    const bid = decisions.evaluate(own, viralJob(store));
+    expect(bid.decision.inputs.dubCostMicros).toBe('100000'); // 30s at $0.20/min
+    expect(own.dubProvider).toBe('HeyGen');
+  });
+
+  it('rejects a dubber without a price, or without https', () => {
+    const { registry } = setup();
+    expect(() => registry.register({ name: 'NoPrice', dubUrl: 'https://dub.example/make' })).toThrow(/dubCostPerMinuteUsd/);
+    expect(() => registry.register({ name: 'Plain', dubUrl: 'http://10.0.0.2/make', dubCostPerMinuteUsd: '0.10' })).toThrow(/https/);
+  });
+
+  it('calls the agent\'s own dubber and saves the file it returns', async () => {
+    const { mkdtemp, readFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { dubExternally } = await import('../src/services/external-dubbing.js');
+    const { store, registry } = setup();
+    const agent = registry.register({ name: 'Owl', dubUrl: 'https://dub.example/make', dubCostPerMinuteUsd: '0.20' });
+    const job = viralJob(store);
+    const dir = await mkdtemp(join(tmpdir(), 'parrot-dub-'));
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      if (url === 'https://dub.example/make') {
+        expect(JSON.parse(init!.body as string).targetLang).toBe('es');
+        return new Response(JSON.stringify({ mediaUrl: 'https://cdn.example/out.mp4' }), { status: 200 });
+      }
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    }) as never;
+    const { localPath } = await dubExternally(agent, job, { mediaDir: dir, fetchImpl: fakeFetch });
+    expect([...(await readFile(localPath))]).toEqual([1, 2, 3]);
+    expect(localPath.endsWith('.es.mp4')).toBe(true);
+  });
+});

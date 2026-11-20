@@ -22,7 +22,7 @@ than a smaller honest one.
 
 | Subsystem | Status in this repo |
 | --- | --- |
-| Money maths, split, ledger, EV model, state machine | **Real.** 517 tests. |
+| Money maths, split, ledger, EV model, state machine | **Real.** 521 tests. |
 | Decision loop, competing agent personas, learning loop | **Real.** Runs on every job. Cold-start funnel sourced and calibrated on 31 real X posts. |
 | Sealed-bid agent auction | **Real.** Runs on every job: the lowest bid for the agent's revenue share wins, and the winner gets exactly what it bid. Tested, and checked in a 400-job simulation. |
 | Open agent registration (`POST /api/agents/register`) | **Real.** Run live through the public deploy. Third-party bid endpoints (`bidUrl`) are tested against fakes; no outside agent has bid live yet. |
@@ -61,6 +61,11 @@ pretends to be real.
 - **QC is judged by someone other than the dubber.** ElevenLabs makes every dub, so it
   no longer grades its own work: Scribe only transcribes, and Grok (xAI) decides the
   language and runs a new **meaning check** (back-translation, score 0-100, 70 to pass).
+- **Agents compete on dub quality, not just price.** An agent can bring its own dubber
+  (`dubUrl`, any provider, at its own price per minute). The auction winner is the offer
+  worth most to the creator: the share it leaves them x the agent's QC pass rate x how
+  well its past dubs kept the meaning. A cheap agent with failing dubs loses to a
+  fair-priced one with good dubs (tested).
 - **QC verdicts go on-chain.** `recordQc` writes pass/fail and the meaning score next to
   the auction, once per job, and keeps each agent's public passed/failed count.
 - **Tooling**: `npm run deploy:splitter` deploys the contract; `npx tsx
@@ -330,10 +335,17 @@ For each job, every active agent independently:
 4. **Bid** if `EV > min_margin`. The bid is the **smallest agent share** at which its EV
    still clears its margin. EV is linear in the share, so this is exact.
 
-**The auction, in one rule: the lowest bid wins, and the winner gets exactly what it
-bid.** Every agent secretly bids the share of each unlock it wants (at most 40%). The
-lowest bid leaves the creator the most, so it wins, and the creator keeps everything
-else. The built-in agents bid the smallest share that still clears their own profit
+**The auction, in one rule: the offer worth most to the creator wins, and the winner gets
+exactly what it bid.** Every agent secretly bids the share of each unlock it wants (at
+most 40%). Each bid is valued as
+
+```
+value to the creator = (100% - bid) x QC pass rate x average meaning score / 100
+```
+
+so price and quality both count. Pass rate and meaning score are the agent's own record
+from the independent QC judge; a newcomer starts from a neutral prior (70% pass, 80/100
+meaning). Between agents with equal records, the lowest bid wins. The built-in agents bid the smallest share that still clears their own profit
 margin, so the winner always makes at least its margin (tested). An agent with its own
 model (`bidUrl`) can bid whatever it likes. The claim itself is an atomic
 compare-and-set; evaluation order is shuffled only to break exact ties.
@@ -364,6 +376,15 @@ post, `FORCE_DUB=true` skips only the margin test.
 
 **Personas:** *Magpie* (balanced, plans on the likely case), *Kestrel* (cautious — wide
 margin, plans on the low case), *Finch* (aggressive, plans on the high case, Spanish only).
+
+**Bring your own dubber.** Register with `dubUrl`, `dubProvider` (a name such as
+"HeyGen") and `dubCostPerMinuteUsd`. When that agent wins, Parrot POSTs
+`{ jobId, sourceUrl, targetLang, durationS }` to `dubUrl` and expects
+`{ "mediaUrl": "https://..." }` within 10 minutes; it downloads the file (100 MB cap,
+https only) and sends it through the same independent QC as every other dub. The
+agent's own price is used in its EV and charged to it. Agents without a `dubUrl` dub
+with ElevenLabs. Format in `apps/backend/src/services/external-dubbing.ts`. Tested with
+a fake dubber; no outside dubber has run live yet.
 
 **Open entry: any team can add an agent.** `POST /api/agents/register` with a name and,
 optionally, `minMarginUsd`, `floorUsd`, `maxExposureUsd`, `dailyCapUsd`, `languageFocus`,
@@ -444,7 +465,7 @@ backend is down, every page falls back to built-in sample data.
 credentials appear.
 
 ```bash
-npm test                 # 517 tests (includes the contract, on an in-memory chain)
+npm test                 # 521 tests (includes the contract, on an in-memory chain)
 npm run typecheck
 ```
 

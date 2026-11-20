@@ -87,9 +87,21 @@ function calibrationSentence(calibration: number, adjusted: number): string {
   return ` My past forecasts ran about ${pct}% ${dir}, so I correct that to ${viewers(adjusted)}.`;
 }
 
-/** What a dub of this length costs at our chosen ElevenLabs tier. */
-export function estimateDubCost(durationS: number): Micros {
-  const perMinute = ELEVENLABS_PRICE_PER_MINUTE[DUBBING_TIER] as bigint;
+/** The house dubbing provider, used by every agent without its own dubber. */
+export const HOUSE_DUB_PROVIDER = 'ElevenLabs';
+
+/** Who makes this agent's dubs. */
+export function dubProviderFor(agent: Pick<Agent, 'dubUrl' | 'dubProvider'>): string {
+  if (agent.dubUrl) return agent.dubProvider?.trim() || 'its own dubber';
+  return HOUSE_DUB_PROVIDER;
+}
+
+/**
+ * What a dub of this length costs. Defaults to our ElevenLabs tier; an agent
+ * with its own dubber passes its own per-minute price.
+ */
+export function estimateDubCost(durationS: number, perMinuteOverride?: Micros | null): Micros {
+  const perMinute = (perMinuteOverride ?? ELEVENLABS_PRICE_PER_MINUTE[DUBBING_TIER]) as bigint;
   // Round up to the nearest micro: never under-state a cost we must pay.
   const cost = (BigInt(Math.ceil(durationS * 1_000)) * perMinute + 59_999n) / 60_000n;
   return micros(cost);
@@ -114,11 +126,19 @@ export interface DecisionOutcome {
 }
 
 export interface AuctionResult {
-  /** The agent share the winner is paid: its own (lowest) bid. */
+  /** The agent share the winner is paid: its own bid. */
   readonly clearingBps: number;
   readonly reserveBps: number;
   /** Every sealed bid, lowest (winning) first. */
-  readonly bids: readonly { agentName: string; bidBps: number }[];
+  readonly bids: readonly {
+    agentName: string;
+    bidBps: number;
+    /** Pass rate x meaning score, 0-100. */
+    qualityPercent: number;
+    /** What the bid is worth to the creator: (10000 - bid) x quality. */
+    valueBps: number;
+    dubProvider: string;
+  }[];
 }
 
 const pctBps = (bps: number) => `${(bps / 100).toFixed(bps % 100 === 0 ? 0 : 1)}%`;
@@ -143,6 +163,26 @@ export class DecisionService {
     return clampPpm(Math.round((published / finished.length) * 1_000_000));
   }
 
+  /**
+   * How good this agent's dubs have been, as a 0..1 multiplier:
+   *   QC pass rate x average meaning score (from the independent judge).
+   * Cold start: the pass-rate prior, and a meaning prior of 80/100 worth two
+   * dubs, so a newcomer is neither punished nor rewarded for having no record.
+   */
+  qualityFor(agent: Agent): { quality: number; passRate: number; meaning: number; measured: number } {
+    const passRate = this.pSuccessFor(agent) / 1_000_000;
+    const scores: number[] = [];
+    for (const j of this.store.jobsForAgent(agent.id)) {
+      const check = j.qcReport?.checks.find((c) => c.name === 'back_translation');
+      const score = (check as { measured?: Record<string, unknown> } | undefined)?.measured?.['meaningScore'];
+      if (typeof score === 'number') scores.push(score);
+    }
+    const PRIOR = 80;
+    const PRIOR_WEIGHT = 2;
+    const meaning = (PRIOR * PRIOR_WEIGHT + scores.reduce((a, b) => a + b, 0)) / (PRIOR_WEIGHT + scores.length);
+    return { quality: passRate * (meaning / 100), passRate, meaning, measured: scores.length };
+  }
+
   /** One agent's evaluation of one job. Pure apart from reading the store. */
   evaluate(agent: Agent, job: Job): Bid {
     const signals = job.signals ?? {
@@ -155,7 +195,7 @@ export class DecisionService {
       ageHours: 0,
     };
 
-    const dubCost = estimateDubCost(job.durationS);
+    const dubCost = estimateDubCost(job.durationS, agent.dubCostPerMinute);
     const balance = this.store.balanceOf(agent.accountId);
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
@@ -310,13 +350,18 @@ export class DecisionService {
     // reserve), the LOWEST bid wins, and the winner gets exactly what it bid.
     // The creator keeps the rest.
     const reserveBps = job.splitAgentBps;
+    // Price AND quality: the winner is the offer worth most to the creator -
+    // the share it leaves them, times how likely the dub is to pass QC and
+    // how well past dubs kept the meaning. A cheap bid from an agent whose dubs
+    // keep failing loses to a fair bid from one whose dubs are good.
     const priced = bids
       .filter((b) => b.approved)
-      .map((b) => ({
-        bid: b,
-        bidBps: externalBids.get(b.agent.id) ?? this.requiredBps(b.decision, reserveBps),
-      }))
-      .sort((a, b) => a.bidBps - b.bidBps);
+      .map((b) => {
+        const bidBps = externalBids.get(b.agent.id) ?? this.requiredBps(b.decision, reserveBps);
+        const q = this.qualityFor(b.agent);
+        return { bid: b, bidBps, q, valueBps: (10_000 - bidBps) * q.quality };
+      })
+      .sort((a, b) => b.valueBps - a.valueBps || a.bidBps - b.bidBps);
 
     const best = priced[0];
     if (best && this.store.claimJob(job.id, best.bid.agent.id)) {
@@ -328,18 +373,25 @@ export class DecisionService {
       const auction: AuctionResult = {
         clearingBps,
         reserveBps,
-        bids: priced.map((p) => ({ agentName: p.bid.agent.name, bidBps: p.bidBps })),
+        bids: priced.map((p) => ({
+          agentName: p.bid.agent.name,
+          bidBps: p.bidBps,
+          qualityPercent: Math.round(p.q.quality * 100),
+          valueBps: Math.round(p.valueBps),
+          dubProvider: dubProviderFor(p.bid.agent),
+        })),
       };
       const others = priced.length - 1;
       const winningDecision: Decision = {
         ...best.bid.decision,
         inputs: { ...best.bid.decision.inputs, agentBps: clearingBps },
         rationale:
-          `${best.bid.decision.rationale} Auction: I bid a ${pctBps(clearingBps)} share` +
+          `${best.bid.decision.rationale} Auction: I bid a ${pctBps(clearingBps)} share, dubbing with ${dubProviderFor(best.bid.agent)}. ` +
+          `My quality record is ${Math.round(best.q.quality * 100)}% (${Math.round(best.q.passRate * 100)}% of my dubs pass QC, meaning kept ${Math.round(best.q.meaning)}/100), ` +
           (others > 0
-            ? `, the lowest of ${others + 1} bids, so I win`
-            : `, the only bid, so I win`) +
-          ` and the creator keeps ${pctBps(10_000 - clearingBps)}.`,
+            ? `so my offer is the best value for the creator of ${others + 1} bids.`
+            : `and mine is the only bid.`) +
+          ` The creator keeps ${pctBps(10_000 - clearingBps)}.`,
       };
       return { winner: best.bid.agent, winningDecision, bids, declineReason: null, auction };
     }

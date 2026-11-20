@@ -44,14 +44,15 @@ export async function collectExternalBids(
     likes: 0, replies: 0, reposts: 0, quotes: 0, sourceViews: 0, authorFollowers: 0, ageHours: 0,
   };
   const prediction = predictViews(signals, job.targetLang, store.getBucket(job.category, job.targetLang));
-  const body = JSON.stringify({
+  const bodyFor = (agent: Agent) => JSON.stringify({
     jobId: job.id,
     targetLang: job.targetLang,
     category: job.category,
     durationS: job.durationS,
     signals,
     quote: {
-      dubCostMicros: estimateDubCost(job.durationS).toString(),
+      // This agent's own cost: its own dubber's price, or the house rate.
+      dubCostMicros: estimateDubCost(job.durationS, agent.dubCostPerMinute).toString(),
       unlockPriceMicros: UNLOCK_PRICE.toString(),
       reserveBps: job.splitAgentBps,
       forecast: prediction.range,
@@ -60,7 +61,9 @@ export async function collectExternalBids(
   });
 
   const answers = await Promise.all(
-    agents.map(async (agent) => [agent.id, await askOne(agent.bidUrl, body, job.splitAgentBps, fetchImpl)] as const),
+    agents.map(
+      async (agent) => [agent.id, await askOne(agent.bidUrl, bodyFor(agent), job.splitAgentBps, fetchImpl)] as const,
+    ),
   );
   return new Map(answers);
 }

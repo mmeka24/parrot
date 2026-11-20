@@ -36,7 +36,14 @@ import {
 } from '@parrot/shared';
 import type { Store } from '../store/store.js';
 import type { Job, Agent } from '../store/types.js';
-import { DecisionService, estimateDubCost, type DecisionOutcome } from './decision-service.js';
+import {
+  DecisionService,
+  estimateDubCost,
+  dubProviderFor,
+  HOUSE_DUB_PROVIDER,
+  type DecisionOutcome,
+} from './decision-service.js';
+import { dubExternally } from './external-dubbing.js';
 import { PaymentService } from './payment-service.js';
 import { agentPrivateKey, getConfig } from '../config.js';
 import { recordAuctionOnchain, recordQcOnchain } from '../chain/splitter.js';
@@ -45,6 +52,8 @@ import { collectExternalBids } from './external-bids.js';
 export interface PipelineHooks {
   /** Called after every accepted transition, for SSE and bot replies. */
   onTransition?: (job: Job, event: JobEventType) => void | Promise<void>;
+  /** Makes a dub with an agent's own provider. Tests inject a fake. */
+  externalDubber?: (agent: Agent, job: Job) => Promise<{ localPath: string }>;
 }
 
 /** What the pipeline needs in order to actually produce a dub. */
@@ -93,6 +102,15 @@ export type IntakeResult =
   | { kind: 'created'; job: Job }
   | { kind: 'duplicate'; job: Job }
   | { kind: 'rejected'; reason: DeclineReason };
+
+/** The real bring-your-own dubber: calls the agent's dubUrl. */
+function defaultExternalDubber(agent: Agent, job: Job): Promise<{ localPath: string }> {
+  const env = getConfig().env;
+  return dubExternally(agent, job, {
+    mediaDir: env.MEDIA_STORAGE_DIR,
+    production: env.NODE_ENV === 'production',
+  });
+}
 
 export class JobPipeline {
   constructor(
@@ -379,9 +397,15 @@ export class JobPipeline {
     const agent = job.claimedByAgentId ? this.store.agents.get(job.claimedByAgentId) : undefined;
     if (!agent) return this.fail(job, 'INTERNAL_ERROR', 'approved job has no agent');
 
-    const dubCost = estimateDubCost(job.durationS);
+    const dubCost = estimateDubCost(job.durationS, agent.dubCostPerMinute);
+    const provider = dubProviderFor(agent);
 
-    job = await this.advance(job, 'DUBBING_STARTED', { dubCost }, { costMicros: dubCost.toString() });
+    job = await this.advance(
+      job,
+      'DUBBING_STARTED',
+      { dubCost },
+      { costMicros: dubCost.toString(), provider },
+    );
 
     // The agent fronts the cost HERE, before knowing whether the dub will pass
     // QC. That is the risk that makes it an economic actor.
@@ -391,6 +415,26 @@ export class JobPipeline {
       amount: dubCost,
       agentPrivateKey: agentPrivateKey(agent.name),
     });
+
+    // Bring-your-own dubber: the agent's own provider makes the dub, and it
+    // faces the same independent QC as everyone else.
+    if (agent.dubUrl) {
+      try {
+        const external = await (this.hooks.externalDubber ?? defaultExternalDubber)(agent, job);
+        return this.advance(
+          this.store.getJob(job.id) as Job,
+          'DUB_RENDERED',
+          { providerJobId: `external:${job.id}`, dubUrl: external.localPath, previewUrl: external.localPath },
+          { simulated: false, provider },
+        );
+      } catch (error: unknown) {
+        return this.fail(
+          this.store.getJob(job.id) as Job,
+          'DUBBING_PROVIDER_ERROR',
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
 
     let created: { providerJobId: string; simulated: boolean };
     try {
@@ -435,6 +479,7 @@ export class JobPipeline {
   private async runQc(job: Job): Promise<Job> {
     const dubPath = job.dubUrl;
     if (!dubPath) return this.fail(job, 'STORAGE_ERROR', 'no rendered dub to check');
+    const qcAgent = job.claimedByAgentId ? this.store.agents.get(job.claimedByAgentId) : undefined;
 
     const report = await this.qc.run({
       dubPath,
@@ -443,7 +488,7 @@ export class JobPipeline {
       targetLang: job.targetLang,
       forceFail: job.qcDemoFail,
       sourceUrl: job.sourceUrl,
-      dubProvider: 'ElevenLabs',
+      dubProvider: qcAgent ? dubProviderFor(qcAgent) : HOUSE_DUB_PROVIDER,
     });
 
     // The verdict goes on-chain next to the auction: the agent's public,

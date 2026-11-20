@@ -79,6 +79,15 @@ export interface Agent {
    * over-forecasting is scaled down, so optimism alone cannot win auctions.
    */
   calibrationPpm?: number;
+  /**
+   * Bring-your-own dubber: the agent's own dubbing endpoint (see
+   * external-dubbing.ts). Unset means the house provider, ElevenLabs.
+   */
+  dubUrl?: string | null;
+  /** Shown on QC reports, e.g. "HeyGen". Defaults to ElevenLabs. */
+  dubProvider?: string | null;
+  /** What this agent's dubbing costs, per minute of source. */
+  dubCostPerMinute?: Micros | null;
 }
 
 export interface Job {

@@ -43,6 +43,12 @@ export const registerAgentSchema = z.object({
   /** Which end of the forecast range the built-in formula plans on. */
   optimism: z.enum(['cautious', 'likely', 'optimistic']).default('likely'),
   bidUrl: z.string().url().nullable().default(null),
+  /** Bring-your-own dubber (see external-dubbing.ts). */
+  dubUrl: z.string().url().nullable().default(null),
+  /** Name shown on QC reports, e.g. "HeyGen". */
+  dubProvider: z.string().trim().max(40).nullable().default(null),
+  /** Your dubber's price per minute of source; used in your EV and charged to you. */
+  dubCostPerMinuteUsd: usd.nullable().default(null),
 });
 
 export type RegisterAgentInput = z.input<typeof registerAgentSchema>;
@@ -92,6 +98,12 @@ export class AgentRegistry {
     if (input.bidUrl && !isAllowedBidUrl(input.bidUrl, this.production)) {
       throw new AgentRegistrationError('bidUrl must be https');
     }
+    if (input.dubUrl && !isAllowedBidUrl(input.dubUrl, this.production)) {
+      throw new AgentRegistrationError('dubUrl must be https');
+    }
+    if (input.dubUrl && !input.dubCostPerMinuteUsd) {
+      throw new AgentRegistrationError('dubCostPerMinuteUsd is required with a dubUrl');
+    }
     if (parseUsd(input.maxExposureUsd) > parseUsd(input.dailyCapUsd)) {
       throw new AgentRegistrationError('maxExposureUsd cannot exceed dailyCapUsd');
     }
@@ -115,6 +127,9 @@ export class AgentRegistry {
       optimismPpm: OPTIMISM_PPM[input.optimism],
       active: true,
       bidUrl: input.bidUrl,
+      dubUrl: input.dubUrl,
+      dubProvider: input.dubUrl ? (input.dubProvider ?? 'its own dubber') : null,
+      dubCostPerMinute: input.dubCostPerMinuteUsd ? parseUsd(input.dubCostPerMinuteUsd) : null,
     });
     this.payments.fundFromFaucet(account.id, parseUsd(NEW_AGENT_CREDIT_USD));
     return agent;
