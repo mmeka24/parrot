@@ -2,12 +2,21 @@ import type { Metadata, Viewport } from 'next';
 import { copy } from '@parrot/shared';
 import { getSystemStatus } from '@/lib/api';
 import { localCopy } from '@/lib/local-copy';
+import { siteUrl } from '@/lib/site';
 import { ServiceWorker, SimulatedBanner, SiteFooter, SiteHeader } from '@/components/SiteChrome';
 import './globals.css';
 
 export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
+  metadataBase: siteUrl,
+  openGraph: {
+    siteName: copy.brand.name,
+    type: 'website',
+    title: copy.brand.name + ' — ' + copy.brand.tagline,
+    description: copy.brand.creatorTagline,
+  },
+  twitter: { card: 'summary_large_image' },
   title: {
     default: copy.brand.name + ' — ' + copy.brand.tagline,
     template: '%s — ' + copy.brand.name,

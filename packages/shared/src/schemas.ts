@@ -102,6 +102,8 @@ export const sourcePostSchema = z.object({
   postId: z.string().min(1),
   authorId: z.string().min(1),
   authorHandle: z.string().min(1),
+  /** The author's display name ("Maria Lopez"), when the source provides one. */
+  authorDisplayName: z.string().min(1).optional(),
   authorFollowers: z.number().int().nonnegative(),
   text: z.string(),
   createdAt: z.coerce.date(),

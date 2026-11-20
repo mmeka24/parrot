@@ -104,7 +104,7 @@ export function AccuracyChart({ points }: { points: readonly AccuracyPointDto[] 
         <path d={line('actual')} fill="none" stroke="var(--teal)" strokeWidth={2} strokeLinecap="round" />
 
         {points.map((p, i) => (
-          <g key={p.at}>
+          <g key={`${p.at}:${i}`}>
             <circle cx={x(i)} cy={y(p.predicted)} r={hover === i ? 5.5 : 4} fill="var(--paper-raised)" stroke="var(--mango)" strokeWidth={2} />
             <circle cx={x(i)} cy={y(p.actual)} r={hover === i ? 5.5 : 4} fill="var(--paper-raised)" stroke="var(--teal)" strokeWidth={2} />
             <rect

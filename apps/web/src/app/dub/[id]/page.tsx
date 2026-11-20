@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { copy, fill } from '@parrot/shared';
+import { copy, fill, type DubPageDto } from '@parrot/shared';
 import { getDub } from '@/lib/api';
 import { sampleDubIds } from '@/lib/fixtures';
 import { localCopy } from '@/lib/local-copy';
@@ -15,10 +15,27 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { id } = await params;
   const { data } = await getDub(id);
+  const title = fill(copy.viewer.dubbedInto, { language: data.targetLanguageName });
+  const description = previewDescription(data);
+  const url = '/dub/' + encodeURIComponent(id);
+  // The image itself comes from ./opengraph-image.tsx, which Next wires into
+  // og:image and twitter:image automatically.
   return {
-    title: fill(copy.viewer.dubbedInto, { language: data.targetLanguageName }),
-    description: copy.viewer.howItWorksBody,
+    title,
+    description,
+    alternates: { canonical: url },
+    openGraph: { type: 'video.other', url, title, description },
+    twitter: { card: 'summary_large_image', title, description },
   };
+}
+
+/** One line for the card under the title: who made it and what it costs. */
+function previewDescription(dub: DubPageDto): string {
+  return [
+    'From ' + dub.creator.displayName + ' (@' + dub.creator.handle + ')',
+    copy.viewer.previewBadge,
+    fill(copy.viewer.unlockCta, { price: dub.price.display }),
+  ].join(' · ');
 }
 
 export default async function DubPage({ params }: { params: Promise<{ id: string }> }) {

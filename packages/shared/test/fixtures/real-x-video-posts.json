@@ -1,0 +1,284 @@
+{
+  "source": "Grok (grok-4.3) X search, 2026-11-20. Metrics as returned by the search tool; URLs and follower counts were not exposed and are omitted.",
+  "posts": [
+    {
+      "handle": "Soulfoodiiee",
+      "category": "cooking",
+      "views": 115134,
+      "likes": 1044,
+      "replies": 18,
+      "reposts": 94,
+      "quotes": 9
+    },
+    {
+      "handle": "zdpftmorgan",
+      "category": "cooking",
+      "views": 11932,
+      "likes": 278,
+      "replies": 9,
+      "reposts": 25,
+      "quotes": 12
+    },
+    {
+      "handle": "XWorldCuisines",
+      "category": "cooking",
+      "views": 87340,
+      "likes": 1418,
+      "replies": 17,
+      "reposts": 182,
+      "quotes": 9
+    },
+    {
+      "handle": "danosseasoning",
+      "category": "cooking",
+      "views": 8796,
+      "likes": 134,
+      "replies": 4,
+      "reposts": 14,
+      "quotes": 0
+    },
+    {
+      "handle": "DrPaiwanFan",
+      "category": "cooking",
+      "views": 121485,
+      "likes": 911,
+      "replies": 12,
+      "reposts": 105,
+      "quotes": 9
+    },
+    {
+      "handle": "thecori_kitchen",
+      "category": "cooking",
+      "views": 54706,
+      "likes": 1630,
+      "replies": 40,
+      "reposts": 235,
+      "quotes": 15
+    },
+    {
+      "handle": "mamboitaliano__",
+      "category": "cooking",
+      "views": 106953,
+      "likes": 1671,
+      "replies": 55,
+      "reposts": 148,
+      "quotes": 12
+    },
+    {
+      "handle": "Its_KGrimm",
+      "category": "cooking",
+      "views": 120429,
+      "likes": 2408,
+      "replies": 42,
+      "reposts": 276,
+      "quotes": 13
+    },
+    {
+      "handle": "thegreatest_sv",
+      "category": "tech",
+      "views": 196463,
+      "likes": 3159,
+      "replies": 151,
+      "reposts": 357,
+      "quotes": 29
+    },
+    {
+      "handle": "DAIEvolutionHub",
+      "category": "education",
+      "views": 2049119,
+      "likes": 6032,
+      "replies": 287,
+      "reposts": 1258,
+      "quotes": 108
+    },
+    {
+      "handle": "readswithravi",
+      "category": "education",
+      "views": 34907,
+      "likes": 1591,
+      "replies": 7,
+      "reposts": 225,
+      "quotes": 3
+    },
+    {
+      "handle": "DAIEvolutionHub",
+      "category": "education",
+      "views": 87688,
+      "likes": 1859,
+      "replies": 23,
+      "reposts": 235,
+      "quotes": 4
+    },
+    {
+      "handle": "MuscleB1ueprint",
+      "category": "fitness",
+      "views": 526875,
+      "likes": 5332,
+      "replies": 9,
+      "reposts": 535,
+      "quotes": 42
+    },
+    {
+      "handle": "Teezygetmula",
+      "category": "fitness",
+      "views": 7640,
+      "likes": 693,
+      "replies": 2,
+      "reposts": 14,
+      "quotes": 0
+    },
+    {
+      "handle": "UofBasketball",
+      "category": "sports",
+      "views": 68663,
+      "likes": 1046,
+      "replies": 14,
+      "reposts": 64,
+      "quotes": 18
+    },
+    {
+      "handle": "FootballArxi",
+      "category": "sports",
+      "views": 147442,
+      "likes": 1982,
+      "replies": 12,
+      "reposts": 304,
+      "quotes": 3
+    },
+    {
+      "handle": "LightOnSports",
+      "category": "sports",
+      "views": 8290,
+      "likes": 323,
+      "replies": 2,
+      "reposts": 78,
+      "quotes": 12
+    },
+    {
+      "handle": "BrickCenter_",
+      "category": "sports",
+      "views": 204766,
+      "likes": 2820,
+      "replies": 77,
+      "reposts": 126,
+      "quotes": 32
+    },
+    {
+      "handle": "patbev21",
+      "category": "comedy",
+      "views": 1198474,
+      "likes": 13944,
+      "replies": 292,
+      "reposts": 854,
+      "quotes": 310
+    },
+    {
+      "handle": "Kosperry",
+      "category": "comedy",
+      "views": 702434,
+      "likes": 56254,
+      "replies": 212,
+      "reposts": 8241,
+      "quotes": 58
+    },
+    {
+      "handle": "ASHL00",
+      "category": "comedy",
+      "views": 613475,
+      "likes": 35132,
+      "replies": 44,
+      "reposts": 3454,
+      "quotes": 85
+    },
+    {
+      "handle": "BoLoudon",
+      "category": "comedy",
+      "views": 26209,
+      "likes": 5325,
+      "replies": 182,
+      "reposts": 888,
+      "quotes": 23
+    },
+    {
+      "handle": "nicksortor",
+      "category": "sports",
+      "views": 136221,
+      "likes": 12847,
+      "replies": 457,
+      "reposts": 1718,
+      "quotes": 73
+    },
+    {
+      "handle": "realBrandonGill",
+      "category": "education",
+      "views": 1270948,
+      "likes": 73978,
+      "replies": 2460,
+      "reposts": 20092,
+      "quotes": 638
+    },
+    {
+      "handle": "peacock",
+      "category": "comedy",
+      "views": 1467431,
+      "likes": 26565,
+      "replies": 674,
+      "reposts": 5942,
+      "quotes": 1348
+    },
+    {
+      "handle": "ABC",
+      "category": "education",
+      "views": 252090,
+      "likes": 9652,
+      "replies": 139,
+      "reposts": 1773,
+      "quotes": 191
+    },
+    {
+      "handle": "TheePopCore",
+      "category": "comedy",
+      "views": 5420,
+      "likes": 681,
+      "replies": 51,
+      "reposts": 230,
+      "quotes": 3
+    },
+    {
+      "handle": "MMAlagies",
+      "category": "comedy",
+      "views": 12539,
+      "likes": 1548,
+      "replies": 219,
+      "reposts": 182,
+      "quotes": 8
+    },
+    {
+      "handle": "theburntpeanut",
+      "category": "comedy",
+      "views": 92853,
+      "likes": 2372,
+      "replies": 38,
+      "reposts": 101,
+      "quotes": 8
+    },
+    {
+      "handle": "Breezy_Politics",
+      "category": "sports",
+      "views": 93154,
+      "likes": 4188,
+      "replies": 130,
+      "reposts": 1034,
+      "quotes": 62
+    },
+    {
+      "handle": "CapatanEl4662",
+      "category": "education",
+      "views": 607476,
+      "likes": 76382,
+      "replies": 1823,
+      "reposts": 20313,
+      "quotes": 639
+    }
+  ]
+}

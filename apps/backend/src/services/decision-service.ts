@@ -36,10 +36,30 @@ import {
   type Micros,
   type Ppm,
   type DeclineReason,
+  type Scenario,
 } from '@parrot/shared';
 import { getConfig } from '../config.js';
 import type { Store } from '../store/store.js';
 import type { Agent, Job } from '../store/types.js';
+
+/**
+ * Which end of the predicted range an agent plans on. `optimismPpm` is the
+ * persona's dial: below 1.0 plans on the low case, above 1.0 on the high case,
+ * exactly 1.0 on the likely case.
+ */
+export function scenarioFor(agent: Pick<Agent, 'optimismPpm'>): Scenario {
+  if (agent.optimismPpm < 1_000_000) return 'low';
+  if (agent.optimismPpm > 1_000_000) return 'high';
+  return 'likely';
+}
+
+const viewers = (v: number) => `${v.toLocaleString()} ${v === 1 ? 'viewer' : 'viewers'}`;
+
+const SCENARIO_SENTENCE: Record<Scenario, (views: number) => string> = {
+  low: (v) => `I plan on the cautious end: ${viewers(v)}.`,
+  likely: (v) => `I plan on the likely case: ${viewers(v)}.`,
+  high: (v) => `I plan on the optimistic end: ${viewers(v)}.`,
+};
 
 /** What a dub of this length costs at our chosen ElevenLabs tier. */
 export function estimateDubCost(durationS: number): Micros {
@@ -106,12 +126,11 @@ export class DecisionService {
     const bucket = this.store.getBucket(job.category, job.targetLang);
     const prediction = predictViews(signals, job.targetLang, bucket);
 
-    // A persona's optimism scales its own view estimate. This is how the
-    // aggressive agent takes bets the conservative one passes on, without
-    // either of them using a different formula.
-    const predictedViews = Math.round(
-      (prediction.predictedViews * agent.optimismPpm) / 1_000_000,
-    );
+    // Every agent sees the same low / likely / high range; its persona decides
+    // which end it plans on. This is how the bold agent takes bets the cautious
+    // one passes on, without either of them using a different formula.
+    const scenario = scenarioFor(agent);
+    const predictedViews = prediction.range[scenario];
 
     const pSuccessPpm = this.pSuccessFor(agent);
     const ev = computeEv({
@@ -196,7 +215,7 @@ export class DecisionService {
     const lang = languageName(job.targetLang);
 
     const mathSentence =
-      `${prediction.rationale} At a ${formatPpmPercent(prediction.conversionPpm)} unlock rate that is ` +
+      `${prediction.rationale} ${SCENARIO_SENTENCE[scenario](predictedViews)} At a ${formatPpmPercent(prediction.conversionPpm)} unlock rate that is ` +
       `${Math.round(ev.expectedUnlocks).toLocaleString()} unlocks, worth ${formatUsd(ev.expectedRevenue)} to me ` +
       `after allowing for a ${formatPpmPercent(pSuccessPpm)} chance the dub comes out well. ` +
       `It costs ${formatUsd(dubCost)} to make.`;

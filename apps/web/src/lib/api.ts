@@ -17,6 +17,7 @@ import type {
   DemoStateDto,
   DubPageDto,
   InjectMentionRequestDto,
+  InjectMentionResponseDto,
   ReceiptDto,
   SystemStatusDto,
   UnlockResponseDto,
@@ -31,19 +32,38 @@ const BASE = RAW_BASE.trim().replace(/\/$/, '');
 export const backendConfigured = BASE.length > 0;
 
 const TIMEOUT_MS = 2500;
+/** An unlock waits for its payment to confirm on-chain, so it gets longer. */
+const UNLOCK_TIMEOUT_MS = 20_000;
 
 export type Sourced<T> = { readonly data: T; readonly live: boolean };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T | null> {
+interface RequestOptions {
+  readonly timeoutMs?: number;
+  /** Return the backend's own error body instead of null on a non-2xx. */
+  readonly passErrors?: boolean;
+}
+
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  options: RequestOptions = {},
+): Promise<T | null> {
   if (!backendConfigured) return null;
   try {
     const res = await fetch(BASE + path, {
       ...init,
       cache: 'no-store',
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      // The viewer is identified by a cookie the backend sets; without this the
+      // browser neither sends nor keeps it, and every unlock is a new viewer.
+      credentials: 'include',
+      signal: AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS),
       headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      if (!options.passErrors) return null;
+      const body = (await res.json().catch(() => null)) as { ok?: unknown } | null;
+      return body && body.ok === false ? (body as T) : null;
+    }
     return (await res.json()) as T;
   } catch {
     return null;
@@ -107,8 +127,21 @@ export async function unlockDub(
   const live = await request<UnlockResponseDto | ApiErrorDto>(
     '/api/dubs/' + encodeURIComponent(id) + '/unlock',
     { method: 'POST', body: '{}' },
+    { timeoutMs: UNLOCK_TIMEOUT_MS, passErrors: true },
   );
   if (live !== null) return live;
+
+  // A real backend that did not answer is NOT the offline demo: the payment
+  // may or may not have gone through, so never show a made-up "Unlock paid".
+  // Retrying is safe - the backend never charges twice for the same dub.
+  if (backendConfigured) {
+    return {
+      ok: false,
+      code: 'PAYMENT_FAILED',
+      title: 'The unlock did not go through',
+      detail: 'We could not reach Parrot. Try again - you will not be charged twice.',
+    };
+  }
 
   const forced = OFFLINE_FAILURES[id];
   if (forced) return forced;
@@ -171,12 +204,14 @@ export function getBotConsole(): Promise<Sourced<BotConsoleDto>> {
   return getOr<BotConsoleDto>('/api/bot', () => fixtures.botConsole);
 }
 
-export async function injectMention(body: InjectMentionRequestDto): Promise<BotPostDto[] | null> {
-  const live = await request<BotPostDto[]>('/api/bot/mention', {
+export async function injectMention(
+  body: InjectMentionRequestDto,
+): Promise<readonly BotPostDto[] | null> {
+  const live = await request<InjectMentionResponseDto>('/api/bot/mention', {
     method: 'POST',
     body: JSON.stringify(body),
   });
-  return live;
+  return live?.posts ?? null;
 }
 
 // ---------------------------------------------------------------------------

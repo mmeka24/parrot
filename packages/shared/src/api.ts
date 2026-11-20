@@ -305,6 +305,13 @@ export interface InjectMentionRequestDto {
   readonly parentPostId?: string;
 }
 
+/** POST /api/bot/mention: the mention and Parrot's reply, newest first. */
+export interface InjectMentionResponseDto {
+  readonly ok: true;
+  readonly jobId: string | null;
+  readonly posts: readonly BotPostDto[];
+}
+
 // ---------------------------------------------------------------------------
 // The local X stand-in (apps/x-clone)  -  /api/x/*
 //
@@ -361,6 +368,12 @@ export interface XCreatePostRequestDto {
   readonly authorHandle: string;
   readonly inReplyToId?: string | null;
   readonly video?: { readonly mediaId: string; readonly durationS: number } | null;
+  /**
+   * Demo only: the reach to give a video post, since a post written a moment
+   * ago has no views and the agents would rightly pass on it. Chirp labels it
+   * as simulated. Likes, replies and reposts are derived from it.
+   */
+  readonly simulatedViews?: number | null;
 }
 
 export interface XMediaUploadDto {

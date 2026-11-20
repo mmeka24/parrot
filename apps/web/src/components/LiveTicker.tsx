@@ -11,7 +11,7 @@ const STALE_AFTER_MS = 20_000;
 
 const KIND_LABEL: Record<TickerEntryDto['kind'], string> = {
   unlock: 'Unlock',
-  settlement: 'Payout',
+  settlement: 'Earnings',
   decision: 'Decision',
   qc: 'Checks',
   dub: 'Dubbing',

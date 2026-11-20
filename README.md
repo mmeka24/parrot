@@ -21,10 +21,11 @@ than a smaller honest one.
 
 | Subsystem | Status in this repo |
 | --- | --- |
-| Money maths, split, ledger, EV model, state machine | **Real.** 455 tests across the repo. |
-| Decision loop, competing agent personas, learning loop | **Real.** Runs on every job. |
-| x402 / Circle Gateway integration | **Written against the real SDK, never run against Circle.** No funded keys. |
-| On-chain USDC settlement on Arc | **Written and typechecked, never broadcast.** No funded keys. |
+| Money maths, split, ledger, EV model, state machine | **Real.** 493 tests. |
+| Decision loop, competing agent personas, learning loop | **Real.** Runs on every job. Cold-start funnel sourced and calibrated on 31 real X posts. |
+| Viewer unlock payment | **Real, on Arc testnet.** 0.02 USDC transfer per unlock, verified on the explorer. |
+| x402 / Circle Gateway integration | **Written against the real SDK, not wired to the unlock route.** See Money flows. |
+| On-chain USDC settlement on Arc | **Real, broadcast on Arc testnet.** Agent payouts and dub costs verified on the explorer. |
 | ElevenLabs dubbing + Scribe STT QC | **Real, run live once (2026-11-19).** A 12.5s English clip was dubbed to Spanish in 9s; QC heard Spanish at 98.6% and passed it. That first live run found two bugs the mocks hid, both fixed and now tested: uploads were labelled `application/octet-stream` (rejected with HTTP 400), and speech-to-text answers `spa` where jobs say `es`, so every correct dub failed QC. |
 | QuickNode Streams webhook + filter | **Unit-tested offline, not connected.** Nothing in the running server creates the stream or mounts the webhook yet, and it has never received a live delivery. |
 | X API | **Written, never called.** The demo runs on Chirp, a local stand-in for X. |
@@ -163,37 +164,34 @@ without it the agent would look profitable purely because its costs were invisib
 Optionally (`COST_SINK_ADDRESS`) we also send a real on-chain transfer of the same amount
 so the spend is publicly visible. Which of the two happened is recorded per settlement.
 
-### 3. Viewer unlock — x402, batched
-`GET /api/dubs/:id/unlock` returns **402** with a base64 `PAYMENT-REQUIRED` header. The
-client retries with a signed `PAYMENT-SIGNATURE`. The payment is an EIP-3009
-`TransferWithAuthorization` — signed, notably, against the **GatewayWallet** contract's
-EIP-712 domain (`GatewayWalletBatched`), not the USDC token's.
+### 3. Viewer unlock — a real transfer per unlock
+`POST /api/dubs/:id/unlock` sends **0.02 USDC on Arc from the viewer wallet to the revenue
+wallet** and waits for it to confirm. Only then is the unlock recorded and split. No
+transfer, no unlock. The unlock's payment reference *is* the transaction hash, so the
+viewer's receipt has a "Verify on Arc" link to that exact payment. Re-watching is free:
+one charge per viewer per dub, enforced by an idempotency key. Measured on Arc testnet:
+confirmed in under a second, with a network fee of roughly $0.001.
+
+Without `VIEWER_POOL_PRIVATE_KEY` the unlock falls back to ledger-only, flagged
+`simulated`, with no link. The demo's simulated-traffic control always uses that
+ledger-only path, so it can run hundreds of unlocks without spending real funds; every one
+of those is labelled simulated.
 
 ### 4. Split and settlement — real transfers
 Each unlock is split instantly in the ledger (40% agent / 60% creator, stored per job).
 On a short cadence the scheduler sweeps what is owed and sends **real USDC ERC-20
-transfers** on Arc, each with an explorer link.
+transfers** on Arc, each with an explorer link. A creator who has not connected a wallet
+yet has their share held until they claim it.
 
-### The Gateway caveat, stated plainly
+### Not yet wired: Circle Gateway (x402) batching
 
-**Circle Gateway does not pay the seller on-chain per unlock.** An accepted authorization
-credits a *pending → available Gateway balance*. Turning that into real USDC requires
-calling `withdraw()`. The batch cadence is not documented by Circle.
-
-So the honest description of this system is:
-
-> Unlocks are **instant, gasless and batched**. Splits are **ledgered instantly**.
-> Settlements to agent and creator wallets are **separate, real on-chain transfers** on a
-> short cadence.
-
-`settle()` succeeding means *the authorization was accepted*, not that USDC moved. We keep
-those as separate fields precisely because conflating them is the easiest way to mislead
-a judge. An individual unlock therefore has **no transaction of its own to verify**, and
-its receipt shows no verify link — the settlement receipts are where verification lives.
-
-**Fallback:** if Gateway cannot route as expected, Circle's Facilitator Service supports
-`eip155:5042002` with the standard `exact` scheme (per-payment, on-chain, costs gas).
-Implemented and selectable via `PAYMENT_MODE`.
+The x402 seller/buyer code in `apps/backend/src/payments/` (EIP-3009
+`TransferWithAuthorization` against the GatewayWallet EIP-712 domain, the `PAYMENT_MODE`
+switch, the Facilitator fallback) is implemented and unit-tested but **not connected to
+the unlock route**. The unlock path above is a plain per-payment transfer instead. Gateway
+would make unlocks gasless and batched, at the cost of no per-unlock transaction to
+verify: an accepted authorization only credits a pending Gateway balance until
+`withdraw()` runs.
 
 ### Economics consistency
 
@@ -231,12 +229,14 @@ no popup, no network switching. Creators are matched by X user ID, so **earnings
 before they have ever signed in**; claiming attaches the account afterwards.
 
 **Gas.** Arc uses USDC for gas, so one balance covers everything. Viewers never touch it:
-their unlocks are gasless via Gateway, and we pre-fund the wallets that do pay gas.
+the pooled viewer wallet pays the ~$0.001 fee per unlock, and we pre-fund every wallet
+that pays fees.
 
-**Custody — stated plainly.** Gateway batching requires **EOA signatures and does not
-support ERC-1271**, which rules out passkey/smart-contract wallets as the *buyer*. So in
-test mode viewer payments are **custodial and pooled**: one server-held key signs, while
-each viewer's balance is tracked in our ledger. This is not how a real deployment should
+**Custody — stated plainly.** In test mode viewer payments are **custodial and pooled**:
+one server-held key pays every unlock, while each viewer's balance is tracked in our
+ledger. (Gateway batching would not lift this on its own: it requires **EOA signatures
+and does not support ERC-1271**, which rules out passkey/smart-contract wallets as the
+*buyer*.) This is not how a real deployment should
 work, and the path off it is non-custodial accounts (below).
 
 **Receipts, not hashes.** "Unlock paid." "Creator share sent." The main UI never shows a
@@ -249,10 +249,21 @@ hash.
 For each job, every active agent independently:
 
 1. **Budget check** — `balance − cost ≥ floor`, plus per-job exposure and a daily cap.
-2. **Predict** international views from engagement (likes, replies, reposts weighted by
-   how much they carry a post into new timelines; follower count logarithmically; decayed
-   by age), via a per-`(category, language)` bucket average, falling back to a cold-start
-   prior scaled by language market size.
+2. **Predict** dub viewers as a **low / likely / high range**. With history, from a
+   per-`(category, language)` bucket average scaled by this post's engagement. On a cold
+   start, from a funnel where every step has a stated source:
+
+   ```
+   people who saw the post         X's own view count (or interactions ÷ 2.7%, the
+                                    median measured on 31 real X video posts)
+   × share of X in that language   DataReportal ad reach by country (Spanish ≈ 8.1%)
+   × how well the post reaches it  50%  (assumption — corrected by the learning loop)
+   × how many open the dub         5%   (assumption; YouTube's dubbed tracks get >25%
+                                         of watch time with one-tap switching — our ceiling)
+   ```
+
+   The persona decides which end of the range it plans on: Kestrel the low case, Magpie
+   the likely case, Finch the high case.
 3. **Compute EV:** `EV = p_success × (predicted_views × r) − dub_cost`, where `p_success`
    is **that agent's own realised QC pass rate** — an agent that keeps shipping bad dubs
    correctly becomes pessimistic about itself.
@@ -264,12 +275,16 @@ compete. They evaluate in shuffled order so no persona wins purely by list posit
 The worked example, which is an executable test:
 
 ```
-2,000 predicted Spanish views · 12.5% unlock rate · 70% chance of passing QC · $0.40 cost
-EV = 0.7 × (2000 × $0.001) − $0.40 = +$1.00   → dub it
+1.2M views × 8.1% × 50% × 5% ≈ 2,425 likely Spanish viewers
+12.5% unlock rate · 70% chance of passing QC · $0.25 cost (30s)
+EV = 0.7 × (2,425 × $0.001) − $0.25 = +$1.44   → dub it
 ```
 
-**Personas:** *Magpie* (balanced), *Kestrel* (cautious — wide margin, discounts its own
-estimates), *Finch* (aggressive, Spanish only).
+The same funnel gives a 10k-view post about 20 viewers, so a 2-cent dub only pays on posts
+with hundreds of thousands of views. That is what the agents do.
+
+**Personas:** *Magpie* (balanced, plans on the likely case), *Kestrel* (cautious — wide
+margin, plans on the low case), *Finch* (aggressive, plans on the high case, Spanish only).
 
 **Learning loop.** 24 hours later (one minute in demo mode) the realised views and unlocks
 are compared against the estimate and folded back into the bucket with exponential
@@ -301,12 +316,15 @@ one that succeeded.
 
 ```bash
 git clone <this repo> && cd ubc
-npm install
+npm install              # needs Node 20.19+ (Tailwind 4 requires it)
 cp .env.example .env     # works as-is; no credentials required
 
-npm run dev:backend      # http://localhost:8787
-npm run dev:web          # http://localhost:3000
+npm run dev:backend      # http://localhost:8787 (reads the root .env itself)
+npm run dev:web          # http://localhost:3100
 ```
+
+The web app talks to the local backend via `apps/web/.env.development`. If the
+backend is down, every page falls back to built-in sample data.
 
 `.env.example` documents every variable. To make the money real, fund wallets at
 `faucet.circle.com` and fill in the key fields; the app picks up each capability as its
@@ -383,6 +401,11 @@ the agents may well decline it - that is the economics working, not a fault.
 with itself (the dub's real length, which ElevenLabs reports, is not passed
 through yet), so `duration_match` cannot fail there. The live test above checked
 it against the real length directly.
+
+**Simulated reach.** A post written a moment ago has no views, and the agents
+correctly refuse to dub it. So when you attach a video, Chirp's composer offers a
+*Simulated reach (demo)* picker (default 1.2M views). The post gets those views
+plus likes, replies and reposts at the median rate measured on real X posts.
 
 ## Demo
 

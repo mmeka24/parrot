@@ -279,7 +279,7 @@ export class BotService {
     private readonly adapter: XAdapter,
     options: BotServiceOptions = {},
   ) {
-    this.webBaseUrl = options.webBaseUrl ?? 'http://localhost:3000';
+    this.webBaseUrl = options.webBaseUrl ?? 'http://localhost:3100';
     this.limiter = new RateLimiter(
       options.replyLimit ?? DEFAULT_REPLY_LIMIT,
       options.replyWindowMs ?? DEFAULT_REPLY_WINDOW_MS,

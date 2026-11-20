@@ -92,6 +92,8 @@ export const localCopy = {
     decisionsTitle: 'Why it said yes or no',
     decisionsSubtitle: 'The same maths the bird runs, in plain words.',
     approved: 'Dubbed it',
+    /** Said yes, but another bird claimed the job first. */
+    outbid: 'Wanted it',
     declined: 'Passed',
     tickerTitle: 'Happening now',
     liveLabel: 'Live',

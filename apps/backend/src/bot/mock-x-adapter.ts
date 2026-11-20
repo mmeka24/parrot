@@ -52,15 +52,17 @@ export const MOCK_USERS: readonly MockXUser[] = [
 ];
 
 /**
- * Seeded video posts. The first is the brief's worked example: @maria, a 30s
- * clip, ~10k views, 800 likes / 120 replies / 200 reposts, 50k followers.
+ * Seeded video posts. The first is the worked example: @maria, a 30s clip that
+ * went viral - 1.2M views, 50k followers. Through the sourced funnel in
+ * predictor.ts that is ~2,400 likely Spanish viewers. A 2-cent dub needs
+ * reach like this to pay back; the small posts below are there to be declined.
  */
 export const MOCK_SEED_POSTS: readonly MockSeedPost[] = [
   {
     handle: 'maria',
     text: 'The one thing nobody tells you about learning to cook on a budget.',
     durationS: 30,
-    metrics: { likes: 800, replies: 120, reposts: 200, quotes: 35, views: 10_000 },
+    metrics: { likes: 18_000, replies: 640, reposts: 2_900, quotes: 210, views: 1_200_000 },
   },
   {
     handle: 'devtoni',
@@ -72,7 +74,7 @@ export const MOCK_SEED_POSTS: readonly MockSeedPost[] = [
     handle: 'chefkenji',
     text: 'Knife skills: the grip everyone gets wrong.',
     durationS: 48,
-    metrics: { likes: 5_400, replies: 610, reposts: 1_200, quotes: 180, views: 92_000 },
+    metrics: { likes: 52_000, replies: 1_900, reposts: 9_800, quotes: 600, views: 2_400_000 },
   },
   {
     handle: 'linafit',
@@ -103,6 +105,8 @@ export interface CreateClonePostInput {
   readonly authorHandle: string;
   readonly inReplyToPostId?: string | null;
   readonly video?: { readonly durationS: number; readonly path: string | null } | null;
+  /** Demo-only starting metrics for a top-level post (see simulatedViews). */
+  readonly metrics?: { likes: number; replies: number; reposts: number; quotes: number; views: number } | null;
 }
 
 export class MockXAdapter implements XAdapter {
@@ -154,6 +158,7 @@ export class MockXAdapter implements XAdapter {
       postId: post.id,
       authorId: post.authorXUserId,
       authorHandle: post.authorHandle,
+      authorDisplayName: post.authorDisplayName || user?.displayName || undefined,
       authorFollowers: user?.followers ?? 0,
       text: post.text,
       createdAt: post.createdAt,
@@ -278,7 +283,9 @@ export class MockXAdapter implements XAdapter {
       parentAuthorXUserId: parent?.authorXUserId ?? null,
       // Top-level posts start with real zeroes; replies carry no metrics, the
       // same as every other reply in this store.
-      metrics: parent ? null : { likes: 0, replies: 0, reposts: 0, quotes: 0, views: 0 },
+      metrics: parent
+        ? null
+        : (input.metrics ?? { likes: 0, replies: 0, reposts: 0, quotes: 0, views: 0 }),
       hasVideo: video !== null,
       videoDurationS: video?.durationS ?? null,
       videoPath: video?.path ?? null,

@@ -272,3 +272,59 @@ describe('real x.com posts, read off the page', () => {
     expect(stored?.lastAnswer?.text).toBe('Your fr dub is live.');
   });
 });
+
+describe('simulated reach on a demo video post', () => {
+  beforeEach(async () => {
+    const { mkdtemp } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    process.env.MEDIA_STORAGE_DIR = await mkdtemp(`${tmpdir()}/parrot-media-`);
+    await start();
+  });
+
+  afterEach(() => {
+    delete process.env.MEDIA_STORAGE_DIR;
+  });
+
+  async function upload(): Promise<string> {
+    const res = await fetch(`${base}/api/x/media`, {
+      method: 'POST',
+      headers: { 'content-type': 'video/webm' },
+      body: new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0, 0, 0, 0]),
+    });
+    return ((await res.json()) as { mediaId: string }).mediaId;
+  }
+
+  it('gives the post the requested views and plausible engagement', async () => {
+    const mediaId = await upload();
+    const { status, body } = await post<XPostDto>('/api/x/posts', {
+      text: 'Budget dinner for four',
+      authorHandle: 'maria',
+      video: { mediaId, durationS: 13 },
+      simulatedViews: 1_200_000,
+    });
+    expect(status).toBe(200);
+    expect(body.metrics.views).toBe(1_200_000);
+    // ~2.7% of views interact, as on the real posts; most of them as likes.
+    expect(body.metrics.likes).toBeGreaterThan(20_000);
+    expect(body.metrics.likes).toBeLessThan(30_000);
+  });
+
+  it('leaves a post without simulated reach at zero, as a fresh post is', async () => {
+    const mediaId = await upload();
+    const { body } = await post<XPostDto>('/api/x/posts', {
+      text: 'Budget dinner for four',
+      authorHandle: 'maria',
+      video: { mediaId, durationS: 13 },
+    });
+    expect(body.metrics.views).toBe(0);
+  });
+
+  it('ignores simulated reach on a text-only post', async () => {
+    const { body } = await post<XPostDto>('/api/x/posts', {
+      text: 'just text',
+      authorHandle: 'maria',
+      simulatedViews: 5_000_000,
+    });
+    expect(body.metrics.views).toBe(0);
+  });
+});

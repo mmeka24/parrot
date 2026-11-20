@@ -18,6 +18,7 @@ import {
   type ApiErrorDto,
   type AgentDashboardDto,
   type BotConsoleDto,
+  type InjectMentionResponseDto,
   type DemoStateDto,
   type FeedStatusDto,
   type TickerEntryDto,
@@ -229,7 +230,10 @@ export function createApp(deps: RouteDeps): Express {
     }
 
     try {
-      const result = payments.recordUnlock({
+      // The viewer pays on-chain: a real USDC transfer to the revenue wallet,
+      // confirmed before the unlock is recorded. See recordPaidUnlock.
+      const revenueAccount = [...store.accounts.values()].find((a) => a.kind === 'revenue');
+      const result = await payments.recordPaidUnlock({
         jobId: job.id,
         viewerAccountId: viewerId,
         amount: UNLOCK_PRICE,
@@ -237,8 +241,8 @@ export function createApp(deps: RouteDeps): Express {
         creatorAccountId: creator.accountId,
         splitAgentBps: job.splitAgentBps,
         splitCreatorBps: job.splitCreatorBps,
-        paymentRef: `x402:${randomUUID()}`,
-        simulated: !getConfig().capabilities.x402Payments,
+        viewerPoolPrivateKey: getConfig().env.VIEWER_POOL_PRIVATE_KEY as `0x${string}` | undefined,
+        revenueAccountId: revenueAccount?.id,
       });
 
       await pipeline.notePaidUnlock(job.id);
@@ -428,7 +432,8 @@ export function createApp(deps: RouteDeps): Express {
       .map(botPostDto);
     for (const post of fresh) deps.broadcastPost?.(post);
 
-    res.json({ ok: true, jobId, posts: fresh });
+    const payload: InjectMentionResponseDto = { ok: true, jobId, posts: fresh };
+    res.json(payload);
   });
 
   // -------------------------------------------------------------------------
@@ -494,7 +499,13 @@ export function createApp(deps: RouteDeps): Express {
         if (result) results.push(result);
       }
     }
-    res.json({ ok: true, resolved: results.length, accuracyPercent: learning.accuracy() });
+    // Mean absolute percentage error: lower is better. Rounded for display.
+    const error = learning.predictionErrorPercent();
+    res.json({
+      ok: true,
+      resolved: results.length,
+      predictionErrorPercent: error === null ? null : Math.round(error * 10) / 10,
+    });
   });
 
   // -------------------------------------------------------------------------

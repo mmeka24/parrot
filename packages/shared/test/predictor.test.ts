@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import realPosts from './fixtures/real-x-video-posts.json';
 import {
   engagementScore,
+  funnelEstimate,
   predictViews,
   updateBucket,
   predictionError,
@@ -9,7 +11,7 @@ import {
   type EngagementSignals,
 } from '../src/predictor.js';
 import { smoothPpm, smoothCount, ppm, rateToPpm, formatPpmPercent } from '../src/ppm.js';
-import { COLD_START_CONVERSION, LEARNING_ALPHA } from '../src/constants.js';
+import { COLD_START_CONVERSION, INTERACTIONS_PER_VIEW, LEARNING_ALPHA } from '../src/constants.js';
 
 const strongPost: EngagementSignals = {
   likes: 800,
@@ -69,12 +71,36 @@ describe('engagementScore', () => {
 });
 
 describe('cold start', () => {
-  it('lands near the brief\'s 2,000 Spanish viewers for the worked example', () => {
-    const prediction = predictViews(strongPost, 'es', undefined);
+  it('reads reach straight from the view count and walks the funnel', () => {
+    // 10,000 views x 8.1% Spanish share x 50% reach x 5% uptake = ~20.
+    const f = funnelEstimate(strongPost, 'es');
+    expect(f.reachMeasured).toBe(true);
+    expect(f.reach.likely).toBe(10_000);
+    expect(f.viewers.likely).toBe(20);
+  });
+
+  it('gives a viral post roughly the brief\'s 2,000 Spanish viewers', () => {
+    const viral = { ...strongPost, sourceViews: 1_200_000 };
+    const prediction = predictViews(viral, 'es', undefined);
     expect(prediction.basis).toBe('cold_start');
-    // Anchored to the worked example; generous bounds because this is a prior.
-    expect(prediction.predictedViews).toBeGreaterThan(1_200);
-    expect(prediction.predictedViews).toBeLessThan(3_500);
+    expect(prediction.predictedViews).toBeGreaterThan(1_800);
+    expect(prediction.predictedViews).toBeLessThan(3_000);
+  });
+
+  it('returns a low / likely / high range that brackets the likely case', () => {
+    const { range, predictedViews } = predictViews(strongPost, 'es', undefined);
+    expect(range.likely).toBe(predictedViews);
+    expect(range.low).toBeLessThan(range.likely);
+    expect(range.high).toBeGreaterThan(range.likely);
+  });
+
+  it('estimates reach from interactions when the view count is missing', () => {
+    const noViews = { ...strongPost, sourceViews: 0 };
+    const f = funnelEstimate(noViews, 'es');
+    expect(f.reachMeasured).toBe(false);
+    // 1,160 interactions at the measured 2.7% per view is ~43,000 views.
+    expect(Math.round(f.reach.likely)).toBe(Math.round(1_160 / INTERACTIONS_PER_VIEW.likely));
+    expect(f.reach.low).toBeLessThan(f.reach.high);
   });
 
   it('uses the cold-start conversion rate', () => {
@@ -98,7 +124,40 @@ describe('cold start', () => {
   it('explains itself in plain language', () => {
     const { rationale } = predictViews(strongPost, 'es', undefined);
     expect(rationale).toContain('Spanish');
+    expect(rationale).toContain('10,000 people saw the post');
     expect(rationale).not.toMatch(/ppm|bps|micros/i);
+  });
+});
+
+describe('calibration against real X video posts', () => {
+  const { posts } = realPosts as {
+    posts: { views: number; likes: number; replies: number; reposts: number; quotes: number | null }[];
+  };
+  const rates = posts
+    .map((p) => (p.likes + p.replies + p.reposts + (p.quotes ?? 0)) / p.views)
+    .sort((a, b) => a - b);
+  const quantile = (q: number) => rates[Math.floor(q * (rates.length - 1))] as number;
+
+  it('has a real sample to calibrate on', () => {
+    expect(posts.length).toBeGreaterThanOrEqual(30);
+  });
+
+  it('uses interaction rates that match the real posts\' quartiles', () => {
+    // Within 25% of the measured p25 / median / p75. If X behaviour shifts,
+    // refresh the fixture and these constants together.
+    const near = (a: number, b: number) => Math.abs(a - b) / b < 0.25;
+    expect(near(INTERACTIONS_PER_VIEW.high, quantile(0.25))).toBe(true);
+    expect(near(INTERACTIONS_PER_VIEW.likely, quantile(0.5))).toBe(true);
+    expect(near(INTERACTIONS_PER_VIEW.low, quantile(0.75))).toBe(true);
+  });
+
+  it('recovers real view counts from interactions alone, within the range, for most posts', () => {
+    const inside = posts.filter((p) => {
+      const f = funnelEstimate({ ...p, quotes: p.quotes ?? 0, sourceViews: 0, authorFollowers: 0, ageHours: 0 }, 'es');
+      return p.views >= f.reach.low && p.views <= f.reach.high;
+    });
+    // The range is p25..p75, so about half should land inside by construction.
+    expect(inside.length / posts.length).toBeGreaterThanOrEqual(0.45);
   });
 });
 

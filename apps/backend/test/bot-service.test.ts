@@ -248,16 +248,16 @@ describe('the mock X', () => {
     expect(service.isMock).toBe(true);
   });
 
-  it('seeds the brief worked example', async () => {
+  it('seeds the viral worked example', async () => {
     const post = await adapter.getPost('mock-post-1');
     expect(post?.authorHandle).toBe('maria');
     expect(post?.authorFollowers).toBe(50_000);
     expect(post?.video?.durationMs).toBe(30_000);
     expect(post?.metrics).toMatchObject({
-      impressionCount: 10_000,
-      likeCount: 800,
-      replyCount: 120,
-      retweetCount: 200,
+      impressionCount: 1_200_000,
+      likeCount: 18_000,
+      replyCount: 640,
+      retweetCount: 2_900,
     });
   });
 

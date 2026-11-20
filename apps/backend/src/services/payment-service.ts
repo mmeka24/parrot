@@ -196,6 +196,67 @@ export class PaymentService {
   // -------------------------------------------------------------------------
 
   /**
+   * A viewer unlock paid for ON-CHAIN: the viewer wallet sends the unlock price
+   * in USDC to the revenue wallet as its own Arc transaction, and only once that
+   * transfer is confirmed is the unlock recorded and split. No transfer, no
+   * unlock - and the unlock's payment reference IS the transaction hash, so the
+   * viewer's receipt links straight to it on the explorer.
+   *
+   * Test mode pools every viewer behind one funded wallet (VIEWER_POOL), while
+   * each viewer's own balance is still tracked in the ledger. Without that key
+   * this falls back to a ledger-only unlock, flagged simulated.
+   */
+  async recordPaidUnlock(
+    input: Omit<Parameters<PaymentService['recordUnlock']>[0], 'paymentRef' | 'simulated'> & {
+      viewerPoolPrivateKey?: Hex;
+      revenueAccountId?: string;
+    },
+  ): Promise<UnlockResult> {
+    const { viewerPoolPrivateKey, revenueAccountId, ...unlock } = input;
+
+    // Re-watching is free: never charge twice for the same viewer and dub.
+    if (this.store.findUnlock(unlock.jobId, unlock.viewerAccountId)) {
+      return this.recordUnlock({ ...unlock, paymentRef: null, simulated: true });
+    }
+
+    const canPayOnchain =
+      this.config.capabilities.onchainSettlement &&
+      viewerPoolPrivateKey !== undefined &&
+      revenueAccountId !== undefined;
+    if (!canPayOnchain) {
+      return this.recordUnlock({ ...unlock, paymentRef: null, simulated: true });
+    }
+
+    // The same checks recordUnlock makes, BEFORE any money moves: a viewer over
+    // the cap or out of credit must not trigger a transfer we then cannot use.
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    if (this.store.unlockCountSince(unlock.viewerAccountId, oneHourAgo) >= VIEWER_UNLOCK_CAP_PER_HOUR) {
+      throw new RateLimitedError(VIEWER_UNLOCK_CAP_PER_HOUR);
+    }
+    const balance = this.store.balanceOf(unlock.viewerAccountId);
+    if ((balance as bigint) < (unlock.amount as bigint)) {
+      throw new InsufficientBalanceError(balance, unlock.amount);
+    }
+
+    const payment = await this.settle({
+      toAccountId: revenueAccountId,
+      amount: unlock.amount,
+      kind: 'unlock_payment',
+      jobId: unlock.jobId,
+      idempotencyKey: `unlock:${unlock.jobId}:${unlock.viewerAccountId}`,
+      fromPrivateKey: viewerPoolPrivateKey,
+    });
+    if (payment.status !== 'confirmed' || payment.txHash === null) {
+      throw new PaymentError(
+        'PAYMENT_FAILED',
+        `unlock payment did not confirm: ${payment.error ?? payment.status}`,
+      );
+    }
+
+    return this.recordUnlock({ ...unlock, paymentRef: payment.txHash, simulated: false });
+  }
+
+  /**
    * Record a paid unlock and split it instantly in the ledger.
    *
    * `paymentRef` identifies the x402 authorization. For Gateway that reference

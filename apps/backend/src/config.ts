@@ -7,12 +7,17 @@
  * pretends to be real - that is the whole point of the test-mode labelling.
  */
 
+import { isAbsolute, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import {
   ARC_TESTNET,
   GATEWAY_FACILITATOR_URL_TESTNET,
   CIRCLE_FACILITATOR_URL,
 } from '@parrot/shared';
+
+/** apps/backend/src/config.ts -> the repository root. */
+const REPO_ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../../..');
 
 const hexKeySchema = z
   .string()
@@ -39,7 +44,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   BACKEND_PORT: z.coerce.number().int().positive().default(8787),
-  PUBLIC_WEB_URL: z.string().url().default('http://localhost:3000'),
+  PUBLIC_WEB_URL: z.string().url().default('http://localhost:3100'),
   PUBLIC_BACKEND_URL: z.string().url().default('http://localhost:8787'),
   /** Where the local X stand-in (apps/x-clone) is served. Used for permalinks. */
   PUBLIC_XCLONE_URL: z.string().url().default('http://localhost:3200'),
@@ -95,7 +100,15 @@ const envSchema = z.object({
   ANTHROPIC_API_KEY: optionalString,
   GEMINI_API_KEY: optionalString,
 
-  MEDIA_STORAGE_DIR: z.string().default('./apps/backend/media'),
+  /**
+   * Relative paths are taken from the REPO ROOT, as written in .env.example.
+   * npm workspaces run this process from apps/backend, so resolving against
+   * the working directory used to land files in apps/backend/apps/backend/.
+   */
+  MEDIA_STORAGE_DIR: z
+    .string()
+    .default('./apps/backend/media')
+    .transform((dir) => (isAbsolute(dir) ? dir : resolve(REPO_ROOT, dir))),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -172,6 +185,37 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     capabilities,
     mockedSubsystems,
   };
+}
+
+/**
+ * Load the repo-root .env into process.env, if there is one.
+ *
+ * `npm run dev:backend` used to need the variables exported by hand, because
+ * nothing read the file. Variables already set in the environment win, so a
+ * deploy that injects real env vars is unaffected. Call before getConfig().
+ */
+export function loadDotEnv(path = resolve(REPO_ROOT, '.env')): boolean {
+  try {
+    process.loadEnvFile(path);
+    return true;
+  } catch {
+    // No .env: fine, everything falls back to its documented default.
+    return false;
+  }
+}
+
+/**
+ * An agent persona's signing key, if one is configured. The agent fronts its
+ * dub cost from this wallet, so its spending is visible on-chain.
+ */
+export function agentPrivateKey(agentName: string): `0x${string}` | undefined {
+  const env = getConfig().env;
+  const keys: Record<string, string | undefined> = {
+    Magpie: env.AGENT_MAGPIE_PRIVATE_KEY,
+    Kestrel: env.AGENT_KESTREL_PRIVATE_KEY,
+    Finch: env.AGENT_FINCH_PRIVATE_KEY,
+  };
+  return keys[agentName] as `0x${string}` | undefined;
 }
 
 export function getConfig(): Config {
