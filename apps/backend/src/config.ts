@@ -82,6 +82,12 @@ const envSchema = z.object({
    */
   DEMO_ADMIN_TOKEN: optionalString,
   /**
+   * Lets anyone press the demo-audience button on a PUBLIC server. The audience
+   * is simulated and labelled and moves no money, but it should not be open by
+   * default. Off unless set: for a live demo only.
+   */
+  DEMO_OPEN: boolish,
+  /**
    * The most Parrot will spend on dubs in one UTC day, in USD ("3.00"). Bounds
    * the worst-case ElevenLabs bill of a public deployment. Unset = no limit.
    */
