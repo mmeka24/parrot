@@ -61,6 +61,12 @@ async function serverCookies(): Promise<string | null> {
   }
 }
 
+function serverBase(): string {
+  if (typeof window !== 'undefined') return BASE;
+  const direct = process.env.BACKEND_ORIGIN?.trim().replace(/\/$/, '');
+  return direct && direct.length > 0 ? direct : BASE;
+}
+
 async function request<T>(
   path: string,
   init?: RequestInit,
@@ -69,7 +75,9 @@ async function request<T>(
   if (!backendConfigured) return null;
   try {
     const forwarded = await serverCookies();
-    const res = await fetch(BASE + path, {
+    // On the server, go straight to the backend. The browser uses BASE, which in
+    // production is this site's own address (proxied), so its cookies are first-party.
+    const res = await fetch(serverBase() + path, {
       ...init,
       cache: 'no-store',
       // The viewer is identified by a cookie the backend sets; without this the
