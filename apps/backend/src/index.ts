@@ -154,7 +154,8 @@ function qcPort(service: QcService, resolveSource: (sourceUrl: string) => Source
         sourceDurationS,
         // The simulated fixture is a short clip, so comparing its real length
         // against the source would fail duration_match for the wrong reason.
-        dubDurationS: dubDurationS || sourceDurationS,
+        // Only the stand-in has a declared length; real dubs are measured.
+        dubDurationS,
         targetLang,
         sourcePath: sourceUrl ? qcSourcePath(sourceUrl, resolveSource) : undefined,
         dubProvider,
@@ -197,7 +198,7 @@ async function main(): Promise<void> {
   const learning = new LearningService(store);
   const seed = new SeedService(store, payments);
   const dubbing = new DubbingService();
-  const qc = new QcService();
+  const qc = new QcService({ ffmpegPath: config.env.FFMPEG_PATH });
 
   const hub = new SseHub();
   const broadcast = (entry: TickerEntryDto): void => {

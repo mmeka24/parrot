@@ -22,7 +22,7 @@ than a smaller honest one.
 
 | Subsystem | Status in this repo |
 | --- | --- |
-| Money maths, split, ledger, EV model, state machine | **Real.** 521 tests. |
+| Money maths, split, ledger, EV model, state machine | **Real.** 509 tests. |
 | Decision loop, competing agent personas, learning loop | **Real.** Runs on every job. Cold-start funnel sourced and calibrated on 31 real X posts. |
 | Sealed-bid agent auction | **Real.** Runs on every job: the lowest bid for the agent's revenue share wins, and the winner gets exactly what it bid. Tested, and checked in a 400-job simulation. |
 | Open agent registration (`POST /api/agents/register`) | **Real.** Run live through the public deploy. Third-party bid endpoints (`bidUrl`) are tested against fakes; no outside agent has bid live yet. |
@@ -30,13 +30,13 @@ than a smaller honest one.
 | Viewer unlock payment | **Real, on Arc testnet.** 0.02 USDC transfer per unlock, verified on the explorer. |
 | x402 / Circle Gateway integration | **Written against the real SDK, not wired to the unlock route.** See Money flows. |
 | On-chain USDC settlement on Arc | **Real, broadcast on Arc testnet.** Agent payouts and dub costs verified on the explorer. |
-| Independent QC judge + meaning check | **Real, tested; not yet run on a real dub.** ElevenLabs makes the dub and Scribe only transcribes; the verdict on language and meaning comes from Grok (xAI). The back-translation meaning check needs a clip with real audio, which the seeded demo posts do not have, so on them it reports `skipped`. |
-| ElevenLabs dubbing + Scribe STT QC | **Real, run live once (2026-11-19).** A 12.5s English clip was dubbed to Spanish in 9s; QC heard Spanish at 98.6% and passed it. That first live run found two bugs the mocks hid, both fixed and now tested: uploads were labelled `application/octet-stream` (rejected with HTTP 400), and speech-to-text answers `spa` where jobs say `es`, so every correct dub failed QC. |
+| Quality check (QC) | **Real, run on real speech (2026-11-20).** ElevenLabs makes dubs; it checks none. ffmpeg measures each dub's real length and audio, and xAI hears it (speech-to-text) and judges its meaning. On three real clips it blocked a dub 14% too long, a Spanish dub with a different message (meaning 0/100), and an English "dub" ordered in Spanish. Fails closed: a real dub that could not be fully checked is not published. Seeded demo posts have no real audio, so they are labelled simulated. |
+| ElevenLabs dubbing | **Real, run live once (2026-11-19).** A 12.5s English clip was dubbed to Spanish in 9s; QC (then using ElevenLabs' own Scribe, since replaced) heard Spanish at 98.6% and passed it. That first live run found two bugs the mocks hid, both fixed and now tested: uploads were labelled `application/octet-stream` (rejected with HTTP 400), and speech-to-text answers `spa` where jobs say `es`, so every correct dub failed QC. |
 | QuickNode Streams webhook + filter | **Unit-tested offline, not connected.** Nothing in the running server creates the stream or mounts the webhook yet, and it has never received a live delivery. |
 | X API | **Written, never called.** The demo runs on Chirp, a local stand-in for X. |
 | Browser extension | **Real, run end to end against Chirp** in Chromium, including through the public deploy. **On x.com: built, never run on the live site** (x.com refuses automated browsers, so it cannot be tested from here). |
 | Grok intent parsing | **Real, live.** Verified with a request the regex cannot read: "the language they speak in Brazil" came back as Portuguese, and the deployed bot dubbed it. The regex remains the fallback if a Grok call fails. |
-| ffmpeg audio checks | **Not run.** ffmpeg is absent, so the check reports `skipped`, never `passed`. |
+| ffmpeg audio and length checks | **Real.** ffmpeg 9.1 measures every real dub (`FFMPEG_PATH`). |
 
 With an empty `.env` the whole flow still runs end to end, and every simulated subsystem
 is listed in `GET /api/system` and rendered as a banner in the UI. Nothing silently
@@ -58,9 +58,12 @@ pretends to be real.
   the agent in one transaction.
 - **More conservative funnel assumptions**: reach 50% to 35%, dub uptake 5% to 2%. A
   1.2M-view post now forecasts about 680 Spanish dub viewers instead of about 2,400.
-- **QC is judged by someone other than the dubber.** ElevenLabs makes every dub, so it
-  no longer grades its own work: Scribe only transcribes, and Grok (xAI) decides the
-  language and runs a new **meaning check** (back-translation, score 0-100, 70 to pass).
+- **No company checks its own work.** ElevenLabs makes dubs and is used for nothing in
+  QC. ffmpeg measures each dub's real length and audio (the old length check compared
+  the original's length with itself, so it could never fail). xAI hears the dub and
+  runs a new **meaning check** (back-translation, score 0-100, 70 to pass). A dub made
+  with xAI is refused, since xAI would be grading itself. A real dub that could not be
+  fully checked is not published.
 - **Agents compete on dub quality, not just price.** An agent can bring its own dubber
   (`dubUrl`, any provider, at its own price per minute). The auction winner is the offer
   worth most to the creator: the share it leaves them x the agent's QC pass rate x how
@@ -423,10 +426,25 @@ Before publishing, four checks:
   is translated back to English, and it is scored 0-100 on whether it says the same
   thing. 70 or more to pass.
 
-**The company that made a dub never judges it.** ElevenLabs makes every dub today, so
-ElevenLabs Scribe is only used to *transcribe* (write down what is said). The verdict on
-language and meaning comes from **Grok (xAI)**, which dubs nothing. Without an xAI key,
-language falls back to Scribe's own language ID and the meaning check reports `skipped`.
+**No company checks its own work.** Dubs are made by ElevenLabs, or by an agent's own
+dubber. Everything that checks a dub is someone else:
+
+| Check | Done by |
+| --- | --- |
+| Length, audio | **ffmpeg** (open source), measuring the actual files |
+| Language | **xAI** speech-to-text, which tells us what language it hears |
+| Meaning | **xAI**: transcribes the original too, translates the dub back, scores it |
+
+No ElevenLabs product is used in QC. If an agent's dubber is xAI/Grok, the language and
+meaning checks refuse and the dub is not published, because xAI would be grading itself.
+
+**Fail closed.** A real dub is published only if all four checks actually ran and
+passed. A check that could not run (no xAI key, no ffmpeg, a service down, no original
+audio) is shown as "Not verified, so not published". Only the simulated stand-in dub,
+which has no real speech, may pass with skipped checks, and it is labelled simulated.
+
+**Run it yourself on real files:**
+`cd apps/backend && npx tsx src/scripts/qc-real-check.ts <dub> <original> es`
 
 **The verdict goes on-chain** (`recordQc`), next to the job's auction record: pass/fail,
 the meaning score (255 = not measured) and a hash of the full report. The contract keeps
@@ -437,12 +455,10 @@ A failure means the dub is **not published**, the cost stays booked as a loss, t
 something bad.
 
 **Limits, honestly:** the meaning check judges transcripts, so it cannot hear tone,
-timing or lip sync, and it needs the original clip's audio (seeded demo posts have none,
-so there it is skipped). It has passed its tests but has not yet run on a real dub.
-ffmpeg is not installed here,
-so the audio check reports `status: 'skipped'` — a tri-state `status` field exists
-precisely because reading a boolean `passed` would make a check that never ran look like
-one that succeeded.
+timing or lip sync, and it needs the original clip's audio. The 10% length limit is
+strict for plain text-to-speech (Spanish runs longer than English); ElevenLabs' dubbing
+API times its output to the video, so real dubs should fit, but that has only been
+measured on one live dub so far.
 
 ---
 
@@ -465,7 +481,7 @@ backend is down, every page falls back to built-in sample data.
 credentials appear.
 
 ```bash
-npm test                 # 521 tests (includes the contract, on an in-memory chain)
+npm test                 # 509 tests (includes the contract, on an in-memory chain)
 npm run typecheck
 ```
 

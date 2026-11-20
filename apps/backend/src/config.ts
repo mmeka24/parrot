@@ -107,6 +107,13 @@ const envSchema = z.object({
   XAI_API_KEY: optionalString,
   XAI_BASE_URL: z.string().url().default('https://api.x.ai/v1'),
   XAI_MODEL: z.string().default('grok-4.3'),
+  /** xAI speech-to-text model, used by QC to hear dubs it did not make. */
+  XAI_STT_MODEL: z.string().default('grok-voice-transcribe-2.0'),
+  /**
+   * Path to ffmpeg (ffprobe must sit next to it). QC measures every dub's real
+   * length and audio with these; without them a real dub is not published.
+   */
+  FFMPEG_PATH: optionalString,
 
   QUICKNODE_API_KEY: optionalString,
   QUICKNODE_STREAM_SECURITY_TOKEN: optionalString,
@@ -174,7 +181,8 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     x402Payments:
       env.PARROT_REVENUE_PRIVATE_KEY !== undefined && env.VIEWER_POOL_PRIVATE_KEY !== undefined,
     dubbing: env.ELEVENLABS_API_KEY !== undefined,
-    qcLanguageDetection: env.ELEVENLABS_API_KEY !== undefined,
+    // QC hears dubs through xAI, never through the company that made them.
+    qcLanguageDetection: env.XAI_API_KEY !== undefined,
     xApi:
       env.X_ENABLED &&
       env.X_BEARER_TOKEN !== undefined &&
@@ -189,7 +197,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
   if (!capabilities.onchainSettlement) mockedSubsystems.push('on-chain settlement (simulated)');
   if (!capabilities.x402Payments) mockedSubsystems.push('viewer payments (simulated)');
   if (!capabilities.dubbing) mockedSubsystems.push('dubbing (fixture audio)');
-  if (!capabilities.qcLanguageDetection) mockedSubsystems.push('QC language detection (heuristic)');
+  if (!capabilities.qcLanguageDetection) mockedSubsystems.push('QC speech checks (not configured: real dubs cannot publish)');
   if (!capabilities.xApi) mockedSubsystems.push('X (local clone, not x.com)');
   if (!capabilities.grokParsing) mockedSubsystems.push('intent parsing (regex fallback)');
   if (!capabilities.quicknodeStream) mockedSubsystems.push('chain feed (RPC polling)');

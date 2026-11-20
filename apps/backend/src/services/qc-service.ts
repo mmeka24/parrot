@@ -1,27 +1,28 @@
 /**
  * QcService - the gate a dub must pass before anyone is asked to pay for it.
  *
- * Four checks, run in this order:
+ * Four checks, every one MEASURED from the actual files:
  *
- *   1. duration_match   the dub is within QC_DURATION_TOLERANCE of the source
- *   2. language_detect  the dub is in the target language
+ *   1. duration_match   ffprobe measures the dub (and the original, when the
+ *                       file is available) - within QC_DURATION_TOLERANCE
+ *   2. language_detect  the dub is transcribed and its spoken language
+ *                       detected; it must be the language that was ordered
  *   3. audio_sanity     ffmpeg: enough sound, no long dead gap, sane loudness
- *   4. back_translation the dub, translated back to English, means what the
- *                       original said
+ *   4. back_translation the original is transcribed too; the dub is translated
+ *                       back to English and scored 0-100 on whether it says the
+ *                       same thing (QC_MIN_MEANING_SCORE to pass)
  *
- * WHO JUDGES: the company that made a dub never gives the verdict on it.
- * ElevenLabs Scribe only TRANSCRIBES (the original and the dub). The verdict on
- * language and meaning comes from an independent judge, Grok (qc-judge.ts).
- * Without a judge configured, language falls back to Scribe's own language ID
- * and the meaning check is reported as skipped.
+ * NO COMPANY CHECKS ITS OWN WORK. Dubs are made by ElevenLabs (or an agent's
+ * own dubber). Everything that CHECKS a dub is someone else: ffmpeg measures,
+ * xAI transcribes (speech-to-text) and judges meaning. No ElevenLabs product is
+ * used here. If a dub was made with xAI, the checker would be grading itself,
+ * so the language and meaning checks refuse and the dub is not published.
  *
- * THE HONESTY RULE THAT SHAPES THIS FILE: a check that did not run is reported
- * as SKIPPED, with the reason, and never as a pass. ffmpeg is not installed on
- * the demo machine, so audio_sanity skips there; the invocation below is the
- * real one and runs unchanged the moment ffmpeg is on PATH. A skipped check
- * does not block the gate (`passed` stays true for it) but `status` is the
- * truthful field and the detail line says so in words, because that detail is
- * what the dashboard prints.
+ * FAIL CLOSED. A real dub is published only if every check actually ran and
+ * passed. A check that could not run (no key, no ffmpeg, an unreachable
+ * service) is reported honestly as "not verified" - and that blocks
+ * publishing. Only the simulated stand-in dub, which has no real speech, may
+ * pass with skipped checks; it is labelled simulated everywhere.
  *
  * The returned report validates against qcReportSchema in @parrot/shared. The
  * extra `status` field on each check is additive - zod strips it on parse.
@@ -29,22 +30,23 @@
 
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import {
   QC_DURATION_TOLERANCE,
-  QC_MIN_LANGUAGE_CONFIDENCE,
   QC_MIN_MEANING_SCORE,
   QC_MIN_NON_SILENCE_RATIO,
   QC_MAX_DEAD_GAP_S,
   QC_LOUDNESS_RANGE_LUFS,
-  elevenLabsSttResponseSchema,
   languageName,
   normalizeLanguageCode,
   type QcReport,
 } from '@parrot/shared';
 import { getConfig } from '../config.js';
-import { JUDGE_NAME, judgeDub, type JudgeVerdict } from './qc-judge.js';
+import { JUDGE_NAME, judgeDub } from './qc-judge.js';
 
-const ELEVENLABS_BASE_URL = 'https://api.elevenlabs.io';
+/** Who checks dubs. Must never be the company that made the dub. */
+export const CHECKER_VENDOR = 'xAI';
+const CHECKER_VENDOR_PATTERN = /\b(xai|grok)\b/i;
 
 /** Silence floor for silencedetect. -50dB is quiet enough to be true silence. */
 const SILENCE_NOISE_DB = -50;
@@ -61,7 +63,7 @@ export type QcCheckStatus = 'passed' | 'failed' | 'skipped';
 
 export interface QcCheckResult {
   readonly name: QcCheckName;
-  /** False only for a real failure. A skipped check never blocks the gate. */
+  /** False when the check failed - or, for a real dub, could not be verified. */
   readonly passed: boolean;
   /** The truthful tri-state. Prefer this over `passed` when you know about it. */
   readonly status: QcCheckStatus;
@@ -75,33 +77,33 @@ export interface QcServiceReport extends QcReport {
 }
 
 export interface QcInput {
-  /** Local path to the dubbed audio. */
+  /** Local path to the dub. */
   readonly dubPath: string;
-  /** Duration of the original clip, in seconds. */
+  /**
+   * The original's length from the post's own metadata. Used only when the
+   * original file itself is not available to measure.
+   */
   readonly sourceDurationS: number;
-  /** Duration of the dub, in seconds. */
-  readonly dubDurationS: number;
   /** The language the dub is supposed to be in. */
   readonly targetLang: string;
   /**
-   * True when the "dub" is the stand-in fixture rather than a real render.
-   * Its language is then reported as skipped, never checked: transcribing a
-   * fixture would spend real credits to learn nothing.
+   * True when the "dub" is the stand-in fixture rather than a real render. It
+   * has no real speech, so the speech checks are skipped and it is labelled
+   * simulated everywhere.
    */
   readonly simulated?: boolean;
-  /**
-   * The original clip's audio: a local path or an http(s) URL. Needed for the
-   * meaning check; without it back_translation is skipped.
-   */
+  /** The original clip: a local path or an https URL. */
   readonly sourcePath?: string;
-  /** Who made the dub, e.g. "ElevenLabs". Shown next to who judged it. */
+  /** Who made the dub, e.g. "ElevenLabs". */
   readonly dubProvider?: string;
+  /** Length of the simulated stand-in only; real dubs are always measured. */
+  readonly dubDurationS?: number;
 }
 
 interface Transcript {
-  language_code: string;
-  language_probability: number;
-  text: string;
+  readonly text: string;
+  /** As reported by the speech service, e.g. "es-mx". */
+  readonly language: string;
 }
 
 export type FetchImpl = (input: string, init?: RequestInit) => Promise<Response>;
@@ -113,11 +115,14 @@ export interface FfmpegResult {
 
 /** Throw with `.code === 'ENOENT'` (or any error) when ffmpeg is absent. */
 export type FfmpegRunner = (args: string[]) => Promise<FfmpegResult>;
+/** Length of a media file in seconds. Throws when it cannot be measured. */
+export type DurationProbe = (pathOrUrl: string) => Promise<number>;
 
 export interface QcServiceDeps {
   readonly fetchImpl?: FetchImpl;
   readonly now?: () => Date;
   readonly runFfmpeg?: FfmpegRunner;
+  readonly probeDuration?: DurationProbe;
   readonly ffmpegPath?: string;
   readonly requestTimeoutMs?: number;
 }
@@ -125,140 +130,95 @@ export interface QcServiceDeps {
 export class QcService {
   private readonly fetchImpl: FetchImpl;
   private readonly now: () => Date;
-  private readonly ffmpegPath: string;
   private readonly runFfmpeg: FfmpegRunner;
+  private readonly probeDuration: DurationProbe;
   private readonly requestTimeoutMs: number;
 
   constructor(deps: QcServiceDeps = {}) {
     this.fetchImpl = deps.fetchImpl ?? ((input, init) => fetch(input, init));
     this.now = deps.now ?? (() => new Date());
-    this.ffmpegPath = deps.ffmpegPath ?? 'ffmpeg';
-    this.runFfmpeg = deps.runFfmpeg ?? ((args) => defaultFfmpegRunner(this.ffmpegPath, args));
+    const ffmpegPath = deps.ffmpegPath ?? 'ffmpeg';
+    this.runFfmpeg = deps.runFfmpeg ?? ((args) => runBinary(ffmpegPath, args));
+    this.probeDuration = deps.probeDuration ?? ((target) => defaultProbe(ffprobeFor(ffmpegPath), target));
     this.requestTimeoutMs = deps.requestTimeoutMs ?? 60_000;
   }
 
   /** Run the whole gate. Never throws for a failing dub - it reports. */
   async run(input: QcInput): Promise<QcServiceReport> {
-    const duration = this.checkDuration(input);
-    const heard = await this.languageAndTranscript(input);
-    const audio = await this.checkAudioSanity(input);
-    const meaning = await this.checkMeaning(input, heard.transcript);
+    const conflict = this.conflict(input);
+    const dubLength = await this.measure(input.dubPath, input);
 
-    // With an independent verdict, the judge - not the transcriber - decides
-    // the language too.
-    const language = meaning.verdict
-      ? this.languageFromJudge(input, meaning.verdict, heard.transcript)
-      : heard.check;
+    const duration = await this.checkDuration(input, dubLength);
+    const heard = await this.languageAndTranscript(input, conflict);
+    const audio = await this.checkAudioSanity(input, dubLength);
+    const meaning = await this.checkMeaning(input, heard.transcript, conflict);
 
-    const checks: QcCheckResult[] = [duration, language, audio, meaning.check];
+    let checks: QcCheckResult[] = [duration, heard.check, audio, meaning];
+    if (input.simulated !== true) {
+      // Fail closed: for a real dub, "could not check" is not a pass.
+      checks = checks.map((c) =>
+        c.status === 'skipped'
+          ? { ...c, passed: false, detail: `Not verified, so not published. ${c.detail}` }
+          : c,
+      );
+    }
     const passed = checks.every((c) => c.passed);
     return { passed, checks, ranAt: this.now() };
   }
 
-  /** The judge's own reading of the dub's language. */
-  private languageFromJudge(
-    input: QcInput,
-    verdict: JudgeVerdict,
-    stt: Transcript | null,
-  ): QcCheckResult {
-    const want = normalizeLanguageCode(input.targetLang);
-    const judged = normalizeLanguageCode(verdict.language);
-    const ok = judged === want;
-    const by = `judged by ${JUDGE_NAME}${input.dubProvider ? `, independent of ${input.dubProvider}, which made the dub` : ''}`;
-    return {
-      name: 'language_detect',
-      passed: ok,
-      status: ok ? 'passed' : 'failed',
-      detail: ok
-        ? `The dub is ${languageName(want)} (${by}).`
-        : `The dub is ${languageName(judged)}, not the ${languageName(want)} that was ordered (${by}).`,
-      measured: {
-        judge: JUDGE_NAME,
-        judged,
-        expected: want,
-        ...(stt ? { transcriberHeard: normalizeLanguageCode(stt.language_code) } : {}),
-      },
-    };
+  /** A dub made by the checker's own company cannot be judged by it. */
+  private conflict(input: QcInput): string | null {
+    if (input.dubProvider && CHECKER_VENDOR_PATTERN.test(input.dubProvider)) {
+      return `this dub was made with ${input.dubProvider}, and ${CHECKER_VENDOR} is also our checker, so it would be grading its own work`;
+    }
+    return null;
   }
 
-  // -------------------------------------------------------------------------
-  // 4. back_translation (the meaning check)
-  // -------------------------------------------------------------------------
-
-  async checkMeaning(
-    input: QcInput,
-    dubTranscript: Transcript | null,
-  ): Promise<{ check: QcCheckResult; verdict: JudgeVerdict | null }> {
-    const skip = (detail: string, reason: string) => ({
-      check: skipped('back_translation', detail, { reason }),
-      verdict: null,
-    });
-    const env = getConfig().env;
+  /** The real length of a file, or null if it cannot be measured. */
+  private async measure(target: string, input: QcInput): Promise<number | null> {
     if (input.simulated === true) {
-      return skip(
-        'Skipped: this dub is a simulated stand-in, so there is no real speech to compare.',
-        'simulated_dub',
-      );
+      return input.dubDurationS && input.dubDurationS > 0 ? input.dubDurationS : null;
     }
-    if (!env.XAI_API_KEY) {
-      return skip('Skipped: no independent judge is configured, so the meaning was not checked.', 'no_judge');
-    }
-    if (!dubTranscript || dubTranscript.text.trim() === '') {
-      return skip(
-        'Skipped: the dub could not be transcribed, so its meaning could not be compared.',
-        'no_dub_transcript',
-      );
-    }
-    if (!input.sourcePath) {
-      return skip('Skipped: the original clip is not available to compare against.', 'no_source');
-    }
-    let source: Transcript;
     try {
-      source = await this.transcribe(input.sourcePath);
-    } catch (err) {
-      return skip(`Skipped: the original clip could not be transcribed (${describe(err)}).`, 'source_unreadable');
+      const seconds = await this.probeDuration(target);
+      return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+    } catch {
+      return null;
     }
-    const verdict = await judgeDub(
-      { sourceText: source.text, dubText: dubTranscript.text, targetLang: input.targetLang },
-      { apiKey: env.XAI_API_KEY, baseUrl: env.XAI_BASE_URL, model: env.XAI_MODEL, fetchImpl: this.fetchImpl },
-    );
-    if (!verdict) {
-      return skip('Skipped: the independent judge could not be reached.', 'judge_unreachable');
-    }
-    const ok = verdict.meaningScore >= QC_MIN_MEANING_SCORE;
-    return {
-      verdict,
-      check: {
-        name: 'back_translation',
-        passed: ok,
-        status: ok ? 'passed' : 'failed',
-        detail: `${ok ? 'The dub keeps the meaning' : 'The dub changes the meaning'}: ${verdict.meaningScore}/100 (we require ${QC_MIN_MEANING_SCORE}). ${verdict.reason}`,
-        measured: {
-          judge: JUDGE_NAME,
-          meaningScore: verdict.meaningScore,
-          minimum: QC_MIN_MEANING_SCORE,
-          backTranslation: verdict.backTranslation.slice(0, 500),
-        },
-      },
-    };
   }
 
   // -------------------------------------------------------------------------
   // 1. duration_match
   // -------------------------------------------------------------------------
 
-  checkDuration(input: QcInput): QcCheckResult {
-    const { sourceDurationS, dubDurationS } = input;
-    if (!(sourceDurationS > 0)) {
-      return {
-        name: 'duration_match',
-        passed: false,
-        status: 'failed',
-        detail: 'The original clip has no usable length, so the dub cannot be compared to it.',
-        measured: { sourceDurationS, dubDurationS },
-      };
+  async checkDuration(input: QcInput, dubLength: number | null): Promise<QcCheckResult> {
+    if (input.simulated === true) {
+      return skipped(
+        'duration_match',
+        'Skipped: this dub is a simulated stand-in, so its length says nothing about a real dub.',
+        { reason: 'simulated_dub' },
+      );
     }
-    const drift = Math.abs(dubDurationS - sourceDurationS) / sourceDurationS;
+    if (dubLength === null) {
+      return skipped(
+        'duration_match',
+        'Skipped: the dub file could not be measured (is ffmpeg installed?).',
+        { reason: 'dub_unmeasurable' },
+      );
+    }
+    // Prefer measuring the original file; fall back to the post's own metadata.
+    const measuredSource = input.sourcePath ? await this.measure(input.sourcePath, input) : null;
+    const sourceLength = measuredSource ?? (input.sourceDurationS > 0 ? input.sourceDurationS : null);
+    const sourceFrom = measuredSource !== null ? 'file' : 'post metadata';
+    if (sourceLength === null) {
+      return skipped(
+        'duration_match',
+        'Skipped: the original has no measurable length to compare against.',
+        { reason: 'source_unmeasurable' },
+      );
+    }
+
+    const drift = Math.abs(dubLength - sourceLength) / sourceLength;
     // Rounded to 6 places so a boundary case at exactly the tolerance is not
     // tipped over by floating point noise.
     const rounded = Math.round(drift * 1e6) / 1e6;
@@ -267,12 +227,13 @@ export class QcService {
       name: 'duration_match',
       passed: ok,
       status: ok ? 'passed' : 'failed',
-      detail: ok
-        ? `The dub runs ${dubDurationS.toFixed(1)}s against the original ${sourceDurationS.toFixed(1)}s, ${formatPercent(rounded)} off - inside the ${formatPercent(QC_DURATION_TOLERANCE)} allowance.`
-        : `The dub runs ${dubDurationS.toFixed(1)}s against the original ${sourceDurationS.toFixed(1)}s, ${formatPercent(rounded)} off - outside the ${formatPercent(QC_DURATION_TOLERANCE)} allowance.`,
+      detail: `The dub runs ${dubLength.toFixed(1)}s against the original ${sourceLength.toFixed(1)}s, ${formatPercent(rounded)} off - ${
+        ok ? 'inside' : 'outside'
+      } the ${formatPercent(QC_DURATION_TOLERANCE)} allowance.`,
       measured: {
-        sourceDurationS,
-        dubDurationS,
+        sourceDurationS: round2(sourceLength),
+        dubDurationS: round2(dubLength),
+        sourceFrom,
         driftRatio: rounded,
         tolerance: QC_DURATION_TOLERANCE,
       },
@@ -283,122 +244,98 @@ export class QcService {
   // 2. language_detect
   // -------------------------------------------------------------------------
 
-  async checkLanguage(input: QcInput): Promise<QcCheckResult> {
-    return (await this.languageAndTranscript(input)).check;
-  }
-
-  /** Transcribe the dub once; the transcript also feeds the meaning check. */
   private async languageAndTranscript(
     input: QcInput,
+    conflict: string | null,
   ): Promise<{ check: QcCheckResult; transcript: Transcript | null }> {
-    const done = (c: QcCheckResult, transcript: Transcript | null = null) => ({ check: c, transcript });
+    const only = (check: QcCheckResult) => ({ check, transcript: null });
     if (input.simulated === true) {
-      return done(skipped(
-        'language_detect',
-        'Skipped: this dub is a simulated stand-in, so there is no real speech to verify.',
-        { reason: 'simulated_dub' },
-      ));
+      return only(
+        skipped(
+          'language_detect',
+          'Skipped: this dub is a simulated stand-in, so there is no real speech to verify.',
+          { reason: 'simulated_dub' },
+        ),
+      );
     }
-    if (!getConfig().capabilities.qcLanguageDetection) {
-      return done(skipped(
-        'language_detect',
-        'Skipped: the speech recognition service is not configured, so the spoken language was not verified.',
-        { reason: 'no_credentials' },
-      ));
+    if (conflict) {
+      return only(failed('language_detect', `No independent checker: ${conflict}.`, { reason: 'checker_conflict' }));
+    }
+    if (!getConfig().env.XAI_API_KEY) {
+      return only(
+        skipped(
+          'language_detect',
+          'Skipped: the independent speech checker is not configured, so the spoken language was not verified.',
+          { reason: 'no_credentials' },
+        ),
+      );
     }
 
-    let stt: Transcript;
+    let transcript: Transcript;
     try {
-      stt = await this.transcribe(input.dubPath);
+      transcript = await this.transcribe(input.dubPath);
     } catch (err) {
-      return done(skipped(
-        'language_detect',
-        `Skipped: the speech recognition service could not be reached, so the spoken language was not verified (${describe(err)}).`,
-        { reason: 'provider_unreachable' },
-      ));
+      return only(
+        skipped(
+          'language_detect',
+          `Skipped: the independent speech checker could not be reached (${describe(err)}).`,
+          { reason: 'checker_unreachable' },
+        ),
+      );
     }
 
-    // Both sides in one form: the speech service answers "spa", jobs say "es".
-    const heard = normalizeLanguageCode(stt.language_code);
+    // "es-mx" and "spa" both become "es".
+    const heard = normalizeLanguageCode(transcript.language);
     const want = normalizeLanguageCode(input.targetLang);
-    const confidence = stt.language_probability;
-
-    if (heard !== want) {
-      return done({
-        name: 'language_detect',
-        passed: false,
-        status: 'failed',
-        detail: `The dub sounds like ${languageName(heard)}, not the ${languageName(want)} that was ordered.`,
-        measured: { detected: heard, expected: want, confidence },
-      }, stt);
+    const measured = { detected: heard, expected: want, checker: CHECKER_VENDOR };
+    if (transcript.text.trim() === '') {
+      return {
+        check: failed('language_detect', 'No speech was heard in the dub.', measured),
+        transcript,
+      };
     }
-    if (confidence < QC_MIN_LANGUAGE_CONFIDENCE) {
-      return done({
+    const ok = heard === want;
+    return {
+      check: {
         name: 'language_detect',
-        passed: false,
-        status: 'failed',
-        detail: `The dub is only ${formatPercent(confidence)} likely to be ${languageName(want)}, below the ${formatPercent(QC_MIN_LANGUAGE_CONFIDENCE)} we require.`,
-        measured: { detected: heard, expected: want, confidence },
-      }, stt);
-    }
-    return done({
-      name: 'language_detect',
-      passed: true,
-      status: 'passed',
-      detail: `The dub is ${languageName(want)} with ${formatPercent(confidence)} confidence.`,
-      measured: { detected: heard, expected: want, confidence },
-    }, stt);
+        passed: ok,
+        status: ok ? 'passed' : 'failed',
+        detail: ok
+          ? `The dub is ${languageName(want)} (heard by ${CHECKER_VENDOR}, independent of ${input.dubProvider ?? 'the dubber'}).`
+          : `The dub sounds like ${languageName(heard)}, not the ${languageName(want)} that was ordered.`,
+        measured,
+      },
+      transcript,
+    };
   }
 
   /**
-   * POST /v1/speech-to-text. `language_code` is deliberately NOT sent: the
-   * whole point of this check is that the service tells US what it hears.
+   * xAI speech-to-text, POST /v1/stt. The language is deliberately NOT sent:
+   * the point is that the checker tells US what it hears.
    */
-  private async transcribe(filePath: string): Promise<Transcript> {
-    const apiKey = getConfig().env.ELEVENLABS_API_KEY;
-    if (apiKey === undefined) throw new Error('no speech recognition credentials');
+  private async transcribe(pathOrUrl: string): Promise<Transcript> {
+    const env = getConfig().env;
+    if (!env.XAI_API_KEY) throw new Error('no speech checker credentials');
 
-    const bytes = /^https?:\/\//.test(filePath)
-      ? await this.download(filePath)
-      : await readFile(filePath);
+    const bytes = /^https?:\/\//.test(pathOrUrl) ? await this.download(pathOrUrl) : await readFile(pathOrUrl);
     const form = new FormData();
-    form.set('model_id', getConfig().env.ELEVENLABS_STT_MODEL);
-    form.set(
-      'file',
-      new Blob([new Uint8Array(bytes)], { type: 'application/octet-stream' }),
-      filePath.split(/[\\/]/).pop() ?? 'dub',
-    );
+    form.set('model', env.XAI_STT_MODEL);
+    form.set('file', new Blob([new Uint8Array(bytes)]), pathOrUrl.split(/[\\/?]/).filter(Boolean).pop() ?? 'audio');
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
-    let res: Response;
-    try {
-      res = await this.fetchImpl(`${ELEVENLABS_BASE_URL}/v1/speech-to-text`, {
-        method: 'POST',
-        // The key lives in this header and nowhere else. It is never logged.
-        headers: { 'xi-api-key': apiKey },
-        body: form,
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timer);
+    const base = (env.XAI_BASE_URL ?? 'https://api.x.ai/v1').replace(/\/$/, '');
+    const res = await this.fetchImpl(`${base}/stt`, {
+      method: 'POST',
+      // The key lives in this header and nowhere else. It is never logged.
+      headers: { authorization: `Bearer ${env.XAI_API_KEY}` },
+      body: form,
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
+    });
+    if (!res.ok) throw new Error(`speech checker returned ${res.status}`);
+    const json = (await res.json()) as { text?: unknown; language?: unknown };
+    if (typeof json.text !== 'string' || typeof json.language !== 'string') {
+      throw new Error('speech checker returned an unreadable response');
     }
-
-    if (!res.ok) {
-      throw new Error(`speech recognition returned ${res.status}`);
-    }
-    const json: unknown = await res.json();
-    const parsed = elevenLabsSttResponseSchema.safeParse(json);
-    if (!parsed.success) {
-      throw new Error('speech recognition returned an unreadable response');
-    }
-    // Multi-channel responses carry `transcripts` instead of a flat result.
-    if ('transcripts' in parsed.data) {
-      const first = parsed.data.transcripts[0];
-      if (first === undefined) throw new Error('speech recognition returned no transcript');
-      return first;
-    }
-    return parsed.data;
+    return { text: json.text, language: json.language };
   }
 
   /** Fetch a remote original clip, capped so a huge file cannot stall QC. */
@@ -421,7 +358,14 @@ export class QcService {
    * loudnorm's JSON block (`input_i`) is accepted too, for callers who swap the
    * runner for `-af loudnorm=print_format=json`.
    */
-  async checkAudioSanity(input: QcInput): Promise<QcCheckResult> {
+  async checkAudioSanity(input: QcInput, dubLength: number | null): Promise<QcCheckResult> {
+    if (input.simulated === true) {
+      return skipped(
+        'audio_sanity',
+        'Skipped: this dub is a simulated stand-in, so there is no real audio to analyse.',
+        { reason: 'simulated_dub' },
+      );
+    }
     const args = [
       '-hide_banner',
       '-nostats',
@@ -452,8 +396,7 @@ export class QcService {
       );
     }
 
-    const duration = input.dubDurationS;
-    if (!(duration > 0)) {
+    if (dubLength === null) {
       return skipped(
         'audio_sanity',
         'Skipped: the dub has no measurable length, so loudness and silence were not measured.',
@@ -461,9 +404,9 @@ export class QcService {
       );
     }
 
-    const silences = parseSilences(result.stderr, duration);
+    const silences = parseSilences(result.stderr, dubLength);
     const totalSilence = silences.reduce((sum, s) => sum + s, 0);
-    const nonSilenceRatio = clamp01(1 - totalSilence / duration);
+    const nonSilenceRatio = clamp01(1 - totalSilence / dubLength);
     const longestGap = silences.length > 0 ? Math.max(...silences) : 0;
     const loudness = parseLoudness(result.stderr);
 
@@ -474,34 +417,24 @@ export class QcService {
       );
     }
     if (longestGap > QC_MAX_DEAD_GAP_S) {
-      problems.push(
-        `there is a ${longestGap.toFixed(1)}s silent stretch (we allow ${QC_MAX_DEAD_GAP_S}s)`,
-      );
+      problems.push(`there is a ${longestGap.toFixed(1)}s silent stretch (we allow ${QC_MAX_DEAD_GAP_S}s)`);
     }
     const [minLufs, maxLufs] = QC_LOUDNESS_RANGE_LUFS;
     if (loudness !== null && (loudness < minLufs || loudness > maxLufs)) {
-      problems.push(
-        `the volume measures ${loudness.toFixed(1)} LUFS, outside the ${minLufs} to ${maxLufs} window`,
-      );
+      problems.push(`the volume measures ${loudness.toFixed(1)} LUFS, outside the ${minLufs} to ${maxLufs} window`);
     }
 
     const measured: Record<string, number | string | boolean> = {
       nonSilenceRatio: Math.round(nonSilenceRatio * 1e4) / 1e4,
       longestGapS: Math.round(longestGap * 100) / 100,
       silentSegments: silences.length,
-      durationS: duration,
+      durationS: round2(dubLength),
       loudnessMeasured: loudness !== null,
     };
     if (loudness !== null) measured.loudnessLufs = loudness;
 
     if (problems.length > 0) {
-      return {
-        name: 'audio_sanity',
-        passed: false,
-        status: 'failed',
-        detail: `The audio is not usable: ${problems.join('; ')}.`,
-        measured,
-      };
+      return failed('audio_sanity', `The audio is not usable: ${problems.join('; ')}.`, measured);
     }
     return {
       name: 'audio_sanity',
@@ -514,6 +447,69 @@ export class QcService {
     };
   }
 
+  // -------------------------------------------------------------------------
+  // 4. back_translation (the meaning check)
+  // -------------------------------------------------------------------------
+
+  async checkMeaning(input: QcInput, dubTranscript: Transcript | null, conflict: string | null): Promise<QcCheckResult> {
+    const env = getConfig().env;
+    if (input.simulated === true) {
+      return skipped(
+        'back_translation',
+        'Skipped: this dub is a simulated stand-in, so there is no real speech to compare.',
+        { reason: 'simulated_dub' },
+      );
+    }
+    if (conflict) {
+      return failed('back_translation', `No independent checker: ${conflict}.`, { reason: 'checker_conflict' });
+    }
+    if (!env.XAI_API_KEY) {
+      return skipped('back_translation', 'Skipped: no independent checker is configured, so the meaning was not checked.', {
+        reason: 'no_judge',
+      });
+    }
+    if (!dubTranscript || dubTranscript.text.trim() === '') {
+      return skipped('back_translation', 'Skipped: the dub could not be transcribed, so its meaning could not be compared.', {
+        reason: 'no_dub_transcript',
+      });
+    }
+    if (!input.sourcePath) {
+      return skipped('back_translation', 'Skipped: the original clip is not available to compare against.', {
+        reason: 'no_source',
+      });
+    }
+    let source: Transcript;
+    try {
+      source = await this.transcribe(input.sourcePath);
+    } catch (err) {
+      return skipped('back_translation', `Skipped: the original clip could not be transcribed (${describe(err)}).`, {
+        reason: 'source_unreadable',
+      });
+    }
+    const verdict = await judgeDub(
+      { sourceText: source.text, dubText: dubTranscript.text, targetLang: input.targetLang },
+      { apiKey: env.XAI_API_KEY, baseUrl: env.XAI_BASE_URL, model: env.XAI_MODEL, fetchImpl: this.fetchImpl },
+    );
+    if (!verdict) {
+      return skipped('back_translation', 'Skipped: the independent judge could not be reached.', {
+        reason: 'judge_unreachable',
+      });
+    }
+    const ok = verdict.meaningScore >= QC_MIN_MEANING_SCORE;
+    return {
+      name: 'back_translation',
+      passed: ok,
+      status: ok ? 'passed' : 'failed',
+      detail: `${ok ? 'The dub keeps the meaning' : 'The dub changes the meaning'}: ${verdict.meaningScore}/100 (we require ${QC_MIN_MEANING_SCORE}). ${verdict.reason}`,
+      measured: {
+        judge: JUDGE_NAME,
+        meaningScore: verdict.meaningScore,
+        minimum: QC_MIN_MEANING_SCORE,
+        originalText: source.text.slice(0, 300),
+        backTranslation: verdict.backTranslation.slice(0, 300),
+      },
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -581,14 +577,17 @@ function skipped(
   detail: string,
   measured: Record<string, number | string | boolean> = {},
 ): QcCheckResult {
-  return {
-    name,
-    // A skipped check does not block the gate. `status` is the truth.
-    passed: true,
-    status: 'skipped',
-    detail,
-    measured: { skipped: true, ...measured },
-  };
+  // `passed` is true here only so a SIMULATED dub is not blocked; run() turns
+  // every skip on a real dub into a block. `status` is always the truth.
+  return { name, passed: true, status: 'skipped', detail, measured: { skipped: true, ...measured } };
+}
+
+function failed(
+  name: QcCheckName,
+  detail: string,
+  measured: Record<string, number | string | boolean> = {},
+): QcCheckResult {
+  return { name, passed: false, status: 'failed', detail, measured };
 }
 
 /** True when a check was reported as skipped rather than run. */
@@ -619,22 +618,53 @@ function clamp01(n: number): number {
   return Math.min(1, Math.max(0, n));
 }
 
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 function formatPercent(ratio: number): string {
   const pct = ratio * 100;
   const rounded = Math.round(pct * 10) / 10;
   return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)}%`;
 }
 
+/** ffprobe lives next to ffmpeg; a bare "ffmpeg" means "on PATH". */
+function ffprobeFor(ffmpegPath: string): string {
+  if (ffmpegPath === 'ffmpeg') return 'ffprobe';
+  return join(dirname(ffmpegPath), ffmpegPath.toLowerCase().endsWith('.exe') ? 'ffprobe.exe' : 'ffprobe');
+}
+
+/** Measure a media file's length with ffprobe. */
+async function defaultProbe(ffprobePath: string, target: string): Promise<number> {
+  const { stdout } = await runBinary(ffprobePath, [
+    '-v',
+    'error',
+    '-show_entries',
+    'format=duration',
+    '-of',
+    'csv=p=0',
+    target,
+  ]);
+  const seconds = Number(stdout.trim());
+  if (!Number.isFinite(seconds) || seconds <= 0) throw new Error('ffprobe found no duration');
+  return seconds;
+}
+
 /**
- * The real runner. ffmpeg writes its analysis to stderr and exits 0, so a
+ * Run ffmpeg/ffprobe. ffmpeg writes its analysis to stderr and exits 0, so a
  * non-zero exit is a genuine problem; a missing binary surfaces as ENOENT on
- * the spawn error, which the caller turns into a SKIPPED check.
+ * the spawn error, which the caller turns into an honest "not verified".
  */
-async function defaultFfmpegRunner(bin: string, args: string[]): Promise<FfmpegResult> {
-  return new Promise<FfmpegResult>((res, rej) => {
-    const child = spawn(bin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+async function runBinary(bin: string, args: string[]): Promise<FfmpegResult & { stdout: string }> {
+  return new Promise((res, rej) => {
+    const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = '';
+    let stdout = '';
+    child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      if (stdout.length < 100_000) stdout += chunk;
+    });
     child.stderr.on('data', (chunk: string) => {
       // Cap it: a long clip prints a lot, and we only need the summaries.
       if (stderr.length < 2_000_000) stderr += chunk;
@@ -642,10 +672,10 @@ async function defaultFfmpegRunner(bin: string, args: string[]): Promise<FfmpegR
     child.on('error', rej);
     child.on('close', (code) => {
       if (code !== 0) {
-        rej(new Error(`ffmpeg exited with ${code ?? 'no code'}`));
+        rej(new Error(`${bin} exited with ${code ?? 'no code'}`));
         return;
       }
-      res({ code: code ?? 0, stderr });
+      res({ code: code ?? 0, stderr, stdout });
     });
   });
 }

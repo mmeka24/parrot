@@ -75,7 +75,8 @@ export interface QcPort {
   run(input: {
     dubPath: string;
     sourceDurationS: number;
-    dubDurationS: number;
+    /** Only for the simulated stand-in; QC measures real dubs itself. */
+    dubDurationS?: number;
     targetLang: string;
     /** Demo determinism: force this dub to fail the gate. */
     forceFail?: boolean;
@@ -483,8 +484,9 @@ export class JobPipeline {
 
     const report = await this.qc.run({
       dubPath,
+      // The post's own metadata. QC measures the dub (and the original file,
+      // when it has one) itself - nothing here is assumed.
       sourceDurationS: job.durationS,
-      dubDurationS: job.durationS,
       targetLang: job.targetLang,
       forceFail: job.qcDemoFail,
       sourceUrl: job.sourceUrl,
