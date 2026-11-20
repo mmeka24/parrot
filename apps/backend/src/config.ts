@@ -44,6 +44,16 @@ const envSchema = z.object({
   /** Where the local X stand-in (apps/x-clone) is served. Used for permalinks. */
   PUBLIC_XCLONE_URL: z.string().url().default('http://localhost:3200'),
   DEMO_MODE: boolish,
+  /**
+   * Run the local X stand-in (Chirp) and seed its demo creators. On by default
+   * for development. Switch OFF (CHIRP_ENABLED=false) to run on the browser
+   * extension alone: nothing is seeded, the stand-in's routes are closed, and
+   * everything comes from the posts the extension reads off x.com.
+   */
+  CHIRP_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === undefined || v.trim() === '' || !['false', '0', 'no'].includes(v.trim().toLowerCase())),
 
   // --- Accounts: sign-in and per-user wallets -------------------------------
   /** SQLite file for users and sessions. On Fly this lives on the /data volume. */
@@ -201,7 +211,13 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
   if (!capabilities.onchainPayments) mockedSubsystems.push('payments (demo balances only, nothing sent on Arc)');
   if (!capabilities.dubbing) mockedSubsystems.push('dubbing (stand-in audio, not real dubs)');
   if (!capabilities.qcSpeechChecks) mockedSubsystems.push('quality check (cannot hear dubs, so real dubs cannot go live)');
-  if (!capabilities.xApi) mockedSubsystems.push('X (the local stand-in timeline, not x.com)');
+  if (!capabilities.xApi) {
+    mockedSubsystems.push(
+      env.CHIRP_ENABLED
+        ? 'X (the local stand-in timeline, not x.com)'
+        : 'X (no API access: Parrot reads posts through the extension and cannot post replies or read view counts)',
+    );
+  }
   if (!capabilities.grok) mockedSubsystems.push('Grok (built-in fallbacks read requests and replies)');
 
   return {

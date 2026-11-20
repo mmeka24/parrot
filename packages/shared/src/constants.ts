@@ -123,6 +123,43 @@ export function simulatedEngagement(views: number): {
 export const X_AD_REACH_MILLIONS = 433;
 
 // ---------------------------------------------------------------------------
+// The forecast (forecast.ts): how many views a dub is expected to get
+// ---------------------------------------------------------------------------
+
+/** One step's range. `low` always means "fewer dub views". */
+export interface FunnelRange {
+  readonly low: number;
+  readonly likely: number;
+  readonly high: number;
+}
+
+/**
+ * How well an English post reaches a language's market, relative to that
+ * market's share of X. 1.0 would mean it reached every market in proportion to
+ * its size. English posts mostly circulate among English speakers, and the big
+ * non-English X markets have low-to-moderate English proficiency (EF English
+ * Proficiency Index), so about a third is the likely case. ASSUMPTION: replaced
+ * by what Parrot measures once a creator has posts behind them.
+ */
+export const MARKET_REACH: FunnelRange = { low: 0.2, likely: 0.35, high: 0.5 };
+
+/**
+ * Of the people reached in that language, how many watch the dub. ASSUMPTION.
+ * A dub is a link or a post in the thread, and organic links on X see roughly
+ * 1-3% click-through; a dub in the viewer's own language should beat a generic
+ * link, so 2% is likely and 5% optimistic. YouTube reports dubbed audio tracks
+ * get over 25% of watch time, but switching there is one tap in the player,
+ * so this sits far below it.
+ */
+export const DUB_UPTAKE: FunnelRange = { low: 0.01, likely: 0.02, high: 0.05 };
+
+/**
+ * The "if it takes off" scenario shown beside the forecast: a video that
+ * reaches this many views. The same figure the demo audience is sized from.
+ */
+export const TAKE_OFF_VIEWS = 1_200_000;
+
+// ---------------------------------------------------------------------------
 // Charging cadence
 // ---------------------------------------------------------------------------
 

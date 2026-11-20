@@ -10,7 +10,7 @@ Built for UBC 26. Main track: **Consumer Applications**. Chain: **Arc testnet**.
 
 | Part | Status |
 | --- | --- |
-| Language planner (explore, then focus on winners), P&L maths, billing | **Real.** Pure, tested (314 tests). |
+| Language planner (explore, then focus on winners), P&L maths, billing | **Real.** Pure, tested (318 tests). |
 | ElevenLabs dubbing | **Real** with `ELEVENLABS_API_KEY`; otherwise a labelled stand-in. Seeded demo posts have no footage, so their dubs are always stand-ins. |
 | Quality check | **Real and fail-closed.** ffmpeg measures; xAI/Grok hears and judges meaning. ElevenLabs never grades its own dubs. |
 | Creator payments on Arc | **Real** for signed-in creators (own Arc wallet, USDC transfer per billing batch, "Verify on Arc" link). Demo creators pay from a labelled test balance with no link. |
@@ -35,6 +35,16 @@ npm run build:extension   # then Load unpacked: apps/extension/dist
 ```
 
 What works on x.com and what does not: Parrot cannot post to X or read X's view counts (no API access), so the dubs are not posted in the thread. Each lives on its own Parrot page, and views come from that page plus, on a demo server, a **simulated audience** sent with the strip's **Send demo audience** button (always labelled). Everything the extension reads off the page is unverified. A real dub of an x.com video needs `yt-dlp`, `ffmpeg`, `ELEVENLABS_API_KEY` and `XAI_API_KEY`; cost is about $0.50 per minute of video per language.
+
+### The forecast, before you dub
+
+Under your own undubbed video the strip shows **What Parrot expects**: per language, the expected views (a range), what you would pay, and what the views are worth at your own rate, plus the total, what Parrot pays to make the dubs, and an "if it takes off to 1.2M views" line. For a creator Parrot knows nothing about, it is a funnel: your video's views x that language's share of X's audience (DataReportal) x stated assumptions on reach (35%) and uptake (2%); 1.2M views gives about 680 Spanish views. Once a creator has measured posts, languages Parrot has already seen use their own results. After dubbing, the strip shows the forecast next to what actually happened. The estimate is a range and an assumption, never a promise: a creator is charged only for views that happen, and never past their per-post budget.
+
+A video with almost no views forecasts almost nothing (an 8-view video forecasts 0), which is why the take-off line is there.
+
+### Extension only, no Chirp
+
+Set `CHIRP_ENABLED=false` and restart the backend. Nothing is seeded, Chirp's routes are closed, and the demo runs entirely on the posts the extension reads from x.com.
 
 ## Run it
 

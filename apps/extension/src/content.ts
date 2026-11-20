@@ -24,6 +24,7 @@ import { X_TESTID, parseStatusHref, xSelector } from '@parrot/shared/x-dom';
 import type {
   ExtensionConfigDto,
   ExtensionDubDto,
+  ExtensionForecastDto,
   ExtensionObservedPostDto,
   ExtensionPostStatusDto,
   ExtensionResultsDto,
@@ -68,6 +69,8 @@ let config: ExtensionConfigDto | null = null;
 const statuses = new Map<string, ExtensionPostStatusDto>();
 /** The numbers under each dubbed post, by post id. */
 const results = new Map<string, ExtensionResultsDto>();
+/** What Parrot expects for each undubbed video of the signed-in creator. */
+const forecasts = new Map<string, ExtensionForecastDto>();
 const local = new Map<string, LocalState>();
 /** The last thing drawn per strip, so an unchanged strip is left alone. */
 const drawn = new WeakMap<ShadowRoot, string>();
@@ -266,6 +269,16 @@ async function refreshOnce(): Promise<void> {
       const response = await ask({ type: 'posts', ids });
       if (response.ok) {
         for (const status of response.data.posts) statuses.set(status.postId, status);
+        // The creator's own undubbed videos get a forecast before they are dubbed.
+        const me = currentHandle();
+        await Promise.all(
+          response.data.posts
+            .filter((status) => status.hasVideo && status.dubs.length === 0 && me !== null && status.authorHandle === me)
+            .map(async (status) => {
+              const found = await ask({ type: 'forecast', postId: status.postId });
+              if (found.ok) forecasts.set(status.postId, found.data);
+            }),
+        );
         // Posts that have dubs also get their numbers.
         await Promise.all(
           response.data.posts
@@ -383,8 +396,10 @@ function draw(
   // Skip the redraw when nothing visible changed, so focus and hover survive
   // the poll.
   const numbers = results.get(postId);
+  const expected = status.dubs.length === 0 ? forecasts.get(postId) : undefined;
   const signature = JSON.stringify([
     numbers ?? null,
+    expected ?? null,
     state.audienceAsked,
     watchable.map((d) => d.jobId),
     pending,
@@ -448,7 +463,8 @@ function draw(
 
   if (canDub && state.menuOpen && !state.busy) strip.append(languageMenu(article, postId, status, state));
 
-  if (numbers) strip.append(resultsPanel(postId, numbers, state, isAuthor, me));
+  if (expected && canDub) strip.append(forecastPanel(expected));
+  if (numbers) strip.append(resultsPanel(postId, numbers, state, isAuthor, me, forecasts.get(postId)));
 
   if (state.message) {
     strip.append(
@@ -467,12 +483,96 @@ function draw(
 
 const WORKING = new Set(['QUEUED', 'DUBBING', 'QC']);
 
+const n0 = (value: number): string => value.toLocaleString('en-US');
+
+/** "120" when the range is tight, "40-400" when it is not. */
+function range(low: number, high: number): string {
+  return low === high ? n0(low) : `${n0(low)}-${n0(high)}`;
+}
+
+/** What Parrot expects, shown under the creator's video before they dub it. */
+function forecastPanel(f: ExtensionForecastDto): HTMLElement {
+  const panel = el('div', { class: 'results' });
+  panel.append(
+    el('div', { class: 'res-head' }, [
+      el('span', { class: 'res-title' }, [t.forecastTitle]),
+      el('span', { class: 'tag' }, [f.modeLabel]),
+    ]),
+    el('p', { class: 'res-summary' }, [
+      f.originalViews !== null ? fill(t.forecastBasedOn, { views: n0(f.originalViews) }) : t.forecastBasedOnUnknown,
+      ' ',
+      f.summary,
+    ]),
+  );
+
+  const rows = el('div', { class: 'rows' });
+  rows.append(
+    el('div', { class: 'frow' }, [
+      el('span', { class: 'src' }, ['Language']),
+      el('span', { class: 'src' }, [t.forecastViewsHead]),
+      el('span', { class: 'src' }, [t.forecastPayHead]),
+    ]),
+  );
+  for (const lang of f.languages) {
+    rows.append(
+      el('div', { class: 'frow' }, [
+        el('span', { class: 'dname' }, [`${lang.flag} ${lang.name}`.trim()]),
+        el('span', { class: 'frange' }, [
+          range(lang.views.low, lang.views.high),
+          ' ',
+          el('small', {}, [
+            `about ${n0(lang.views.likely)} · ${lang.source === 'learned' ? t.forecastLearned : t.forecastEstimate}`,
+          ]),
+        ]),
+        el('span', { class: 'dpaid' }, [lang.youPay.display]),
+      ]),
+    );
+  }
+  panel.append(rows);
+
+  const net = f.totals.net.display;
+  panel.append(
+    el('div', { class: 'totals' }, [
+      el('div', {}, [
+        el('small', {}, [t.forecastTotalViews]),
+        el('b', {}, [range(f.totals.views.low, f.totals.views.high)]),
+      ]),
+      el('div', {}, [
+        el('small', {}, [t.forecastTotalPay]),
+        el('b', {}, [
+          f.totals.youPayLow.display === f.totals.youPayHigh.display
+            ? f.totals.youPayLikely.display
+            : `${f.totals.youPayLow.display}-${f.totals.youPayHigh.display}`,
+        ]),
+      ]),
+      el('div', {}, [el('small', {}, [t.forecastTotalWorth]), el('b', {}, [f.totals.worth.display])]),
+      el('div', {}, [el('small', {}, [t.forecastTotalNet]), el('b', { class: net.startsWith('-') ? 'down' : 'up' }, [net])]),
+    ]),
+    el('p', { class: 'fine' }, [fill(t.forecastParrotPays, { amount: f.totals.dubCost.display })]),
+    el('p', { class: 'takeoff' }, [
+      fill(t.forecastTakeOff, {
+        views: n0(f.takeOff.views),
+        dubViews: n0(f.takeOff.dubViews),
+        pay: f.takeOff.youPay.display,
+        worth: f.takeOff.worth.display,
+      }),
+    ]),
+    el('p', { class: 'fine' }, [fill(t.forecastCapNote, { budget: f.postBudget.display })]),
+  );
+  if (f.valueIsDefault) {
+    panel.append(el('p', { class: 'fine' }, [fill(t.forecastExampleRate, { rate: f.valuePerThousand.display })]));
+  }
+  panel.append(el('p', { class: 'fine' }, [f.basis]));
+  return panel;
+}
+
 function resultsPanel(
   postId: string,
   r: ExtensionResultsDto,
   state: LocalState,
   isAuthor: boolean,
   me: string | null,
+  before?: ExtensionForecastDto,
 ): HTMLElement {
   const panel = el('div', { class: 'results' });
 
@@ -537,6 +637,20 @@ function resultsPanel(
     el('p', { class: 'fine' }, [fill(t.resultsParrotPaid, { amount: r.totals.dubCost.display })]),
   );
 
+  // What was expected, next to what happened.
+  if (before) {
+    panel.append(
+      el('p', { class: 'fine' }, [
+        fill(t.resultsVsExpected, {
+          expected: n0(before.totals.views.likely),
+          expectedPay: before.totals.youPayLikely.display,
+          views: n0(r.totals.views),
+          paid: r.totals.paid.display,
+        }),
+      ]),
+    );
+  }
+
   if (r.measured && r.learned.languages.length > 0) {
     const chips = el('div', { class: 'chips' });
     for (const lang of r.learned.languages) {
@@ -574,7 +688,7 @@ function resultsPanel(
   actions.append(el('a', { class: 'btn2', href: r.dashboardUrl, target: '_blank', rel: 'noopener' }, [t.resultsDashboard]));
   panel.append(actions);
 
-  if (r.includesSimulated) panel.append(el('p', { class: 'fine' }, [t.resultsSimulated]));
+  if (r.includesSimulated) panel.append(el('p', { class: 'fine' }, [fill(t.resultsSimulated, { views: '1,200,000' })]));
   return panel;
 }
 

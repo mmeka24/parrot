@@ -153,6 +153,23 @@ button {
 .reply b { color: var(--p-ink); }
 .status { margin: 8px 0 0; color: var(--p-soft); }
 .status.error { color: var(--p-bad); }
+/* ---- forecast ---------------------------------------------------------- */
+.frow {
+  display: grid;
+  grid-template-columns: minmax(96px, 1.1fr) minmax(0, 1.6fr) auto;
+  gap: 2px 10px;
+  align-items: baseline;
+  padding: 5px 0;
+  border-top: 1px solid var(--p-rule);
+}
+.frow:first-child { border-top: 0; }
+.frange { font-variant-numeric: tabular-nums; }
+.frange small { color: var(--p-soft); font-size: 11.5px; }
+.src { color: var(--p-soft); font-size: 11px; font-weight: 600; }
+.takeoff {
+  margin: 8px 0 0; padding: 8px 10px; border-radius: 10px;
+  background: var(--p-teal-wash); color: var(--p-ink);
+}
 /* ---- results panel ---------------------------------------------------- */
 .results {
   margin-top: 10px;

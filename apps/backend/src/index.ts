@@ -18,7 +18,7 @@ import {
   type QcReport,
 } from '@parrot/shared';
 import { createApp } from './api/routes.js';
-import { extensionResults, mediaUrl } from './api/mappers.js';
+import { extensionForecast, extensionResults, mediaUrl } from './api/mappers.js';
 import { BotService, replies } from './bot/bot-service.js';
 import { MockXAdapter } from './bot/mock-x-adapter.js';
 import { createXApiAdapter, type XAdapter } from './bot/x-adapter.js';
@@ -185,7 +185,9 @@ async function main(): Promise<void> {
     mediaUrlFor: (videoPath) => mediaUrl(videoPath),
   });
   const adapter: XAdapter = realX ?? mockX;
-  const standIn = adapter.isMock ? mockX : null;
+  // The local stand-in (Chirp) is optional: with CHIRP_ENABLED=false everything
+  // comes from the posts the extension reads off x.com.
+  const standIn = adapter.isMock && config.env.CHIRP_ENABLED ? mockX : null;
   const bot = new BotService(store, adapter, { webBaseUrl: config.env.PUBLIC_WEB_URL });
 
   const resolveSource = (sourceUrl: string): SourceMedia => {
@@ -271,7 +273,11 @@ async function main(): Promise<void> {
     ...grok,
     onReady: (handle) => hub.broadcast({ type: 'creator', handle, reason: 'views' }),
   });
-  const demoAudience = standIn ? new DemoAudience({ store, mockX: standIn, afterWave: () => views.sync() }) : null;
+  // The simulated audience belongs to a demo server, not to Chirp: it works on
+  // dubs of a post read through the extension too. On a public server it is
+  // closed unless DEMO_OPEN is set.
+  const demoAllowed = config.isDemoMode && (config.env.NODE_ENV !== 'production' || config.env.DEMO_OPEN);
+  const demoAudience = demoAllowed ? new DemoAudience({ store, mockX: standIn, afterWave: () => views.sync() }) : null;
 
   // ---- the demo world -------------------------------------------------------
   // Built through the REAL path - plan, dub, check, post, count, charge - with
@@ -330,7 +336,7 @@ async function main(): Promise<void> {
     xclone: {
       store,
       mockX,
-      enabled: adapter.isMock,
+      enabled: standIn !== null,
       processMentionById: (mentionId) => flow.processMention(mentionId),
       onVideoPost: (postId, authorHandle) => flow.onNewVideoPost(postId, authorHandle),
     },
@@ -339,6 +345,22 @@ async function main(): Promise<void> {
       adapter,
       botHandle: config.env.X_BOT_HANDLE,
       dubObservedPost: (post, lang) => flow.dubObservedPost(post, lang),
+      forecast: (post) => {
+        if (post.durationS === null) return null;
+        const creator = flow.ensureCreator({
+          xUserId: `x-handle-${post.authorHandle}`,
+          handle: post.authorHandle,
+          displayName: post.authorDisplayName || post.authorHandle,
+          followers: 0,
+        });
+        return extensionForecast({
+          creator,
+          plan: campaigns.plan(creator),
+          postId: post.postId,
+          originalViews: post.metrics.views,
+          durationS: post.durationS,
+        });
+      },
       results: (postId) => {
         const post = store.findPostBySource(postId);
         const creator = post ? store.creators.get(post.creatorId) : undefined;

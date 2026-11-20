@@ -17,8 +17,15 @@ import {
   USDC_ADDRESS,
   addPnl,
   addressUrl,
+  TAKE_OFF_VIEWS,
   breakEvenViews,
   copy,
+  estimateDubCost,
+  expectedCharge,
+  forecastViews,
+  languageEconomics,
+  learnedForecast,
+  viewValue,
   fill,
   formatUsd,
   languageByCode,
@@ -30,6 +37,7 @@ import {
   type DubDto,
   type DubPageDto,
   type ExtensionResultsDto,
+  type ExtensionForecastDto,
   type LanguagePlan,
   type LanguageRefDto,
   type LanguageRowDto,
@@ -578,5 +586,100 @@ export function extensionResults(input: {
     },
     dashboardUrl: `${webUrl}/creator/${creator.handle}`,
     includesSimulated: live.some((d) => d.simulatedViews > 0),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/extension/forecast
+// ---------------------------------------------------------------------------
+
+export function extensionForecast(input: {
+  readonly creator: Creator;
+  readonly plan: LanguagePlan;
+  readonly postId: string;
+  readonly originalViews: number | null;
+  readonly durationS: number;
+}): ExtensionForecastDto {
+  const { creator, plan } = input;
+  const dubCost = estimateDubCost(input.durationS);
+  const budget = creator.postBudget;
+  const original = input.originalViews;
+
+  let likely = 0;
+  let low = 0;
+  let high = 0;
+  let pay = { low: 0n, likely: 0n, high: 0n };
+  let worth = 0n;
+  let takeOffViews = 0;
+
+  const languages = plan.entries.map((entry) => {
+    const standing = plan.standings.find((s) => s.lang === entry.lang);
+    const learned = standing !== undefined && standing.tries > 0;
+    const views = learned
+      ? learnedForecast(standing.avgViews)
+      : forecastViews(original ?? 0, entry.lang);
+    const eco = languageEconomics({ forecast: views, dubCost, valuePerThousand: creator.valuePerThousand, budget });
+    low += views.low;
+    likely += views.likely;
+    high += views.high;
+    pay = {
+      low: pay.low + (eco.youPay.low as bigint),
+      likely: pay.likely + (eco.youPay.likely as bigint),
+      high: pay.high + (eco.youPay.high as bigint),
+    };
+    worth += eco.worthLikely as bigint;
+    takeOffViews += forecastViews(TAKE_OFF_VIEWS, entry.lang).likely;
+    return {
+      code: entry.lang,
+      name: languageRef(entry.lang).name,
+      flag: languageRef(entry.lang).flag,
+      roleLabel: ROLE_LABEL[entry.role],
+      source: learned ? ('learned' as const) : ('estimate' as const),
+      views,
+      breakEvenViews: eco.breakEven,
+      youPay: money(eco.youPay.likely),
+      worth: money(eco.worthLikely),
+    };
+  });
+
+  // One post's budget is shared by all its dubs, so the totals are capped by it.
+  const cap = (amount: bigint): Micros => micros(amount > (budget as bigint) ? (budget as bigint) : amount);
+  const totalPay = cap(pay.likely);
+  const takeOffPay = expectedCharge(takeOffViews, budget);
+  const takeOffWorth = viewValue(takeOffViews, creator.valuePerThousand);
+  const totalDubCost = micros((dubCost as bigint) * BigInt(plan.entries.length));
+  const anyLearned = languages.some((l) => l.source === 'learned');
+
+  return {
+    postId: input.postId,
+    handle: creator.handle,
+    originalViews: original,
+    durationS: input.durationS,
+    modeLabel: MODE_LABEL[plan.mode],
+    summary: plan.summary,
+    pricePerThousand: money(micros((PRICE_PER_VIEW as bigint) * 1_000n)),
+    valuePerThousand: money(creator.valuePerThousand),
+    valueIsDefault: creator.valueIsDefault,
+    postBudget: money(budget),
+    languages,
+    totals: {
+      dubCost: money(totalDubCost),
+      views: { low, likely, high },
+      youPayLow: money(cap(pay.low)),
+      youPayLikely: money(totalPay),
+      youPayHigh: money(cap(pay.high)),
+      worth: money(micros(worth)),
+      net: money(micros(worth - (totalPay as bigint))),
+    },
+    takeOff: {
+      views: TAKE_OFF_VIEWS,
+      dubViews: takeOffViews,
+      youPay: money(takeOffPay),
+      worth: money(takeOffWorth),
+      net: money(micros((takeOffWorth as bigint) - (takeOffPay as bigint))),
+    },
+    basis: anyLearned
+      ? 'Languages Parrot has already measured use your own earlier results. The rest use X audience figures by language (DataReportal) and stated assumptions on reach and uptake.'
+      : 'X audience figures by language (DataReportal) times your video\'s views, with stated assumptions on how many of them are reached and watch. Parrot replaces this with your real numbers after your first post.',
   };
 }

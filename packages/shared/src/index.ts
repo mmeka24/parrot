@@ -2,6 +2,7 @@ export * from './units.js';
 export * from './ppm.js';
 export * from './pnl.js';
 export * from './language-plan.js';
+export * from './forecast.js';
 export * from './state-machine.js';
 export * from './constants.js';
 export * from './chain.js';

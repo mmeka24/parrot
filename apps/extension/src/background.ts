@@ -7,7 +7,7 @@
  * demo server, the simulated audience (audience).
  */
 
-import type { ExtensionConfigDto, ExtensionResultsDto, ExtensionStatusResponseDto } from '@parrot/shared';
+import type { ExtensionConfigDto, ExtensionForecastDto, ExtensionResultsDto, ExtensionStatusResponseDto } from '@parrot/shared';
 import { DEFAULT_SERVER, type Request, type Response } from './messages';
 
 const SERVER_KEY = 'server';
@@ -62,6 +62,9 @@ async function handle(request: Request): Promise<unknown> {
       return getJson('/api/extension/observe', { posts: request.posts.slice(0, MAX_IDS) });
     case 'request':
       return getJson('/api/extension/request', request.body);
+    case 'forecast':
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(request.postId)) throw new Error('not a post id');
+      return getJson<ExtensionForecastDto>(`/api/extension/forecast?postId=${encodeURIComponent(request.postId)}`);
     case 'results':
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(request.postId)) throw new Error('not a post id');
       return getJson<ExtensionResultsDto>(`/api/extension/results?postId=${encodeURIComponent(request.postId)}`);

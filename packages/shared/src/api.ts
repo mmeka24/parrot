@@ -610,6 +610,58 @@ export interface ExtensionDubAcceptedDto {
   readonly ok: true;
 }
 
+/**
+ * GET /api/extension/forecast?postId=  -  shown under a video BEFORE it is
+ * dubbed: how many views each language is expected to get, what that would cost
+ * the creator and be worth to them, and what Parrot pays to make the dubs.
+ */
+export interface ExtensionForecastDto {
+  readonly postId: string;
+  readonly handle: string;
+  /** Views on the original, as the page showed them. Null when unknown. */
+  readonly originalViews: number | null;
+  readonly durationS: number;
+  readonly modeLabel: string;
+  /** One line: why these languages. */
+  readonly summary: string;
+  readonly pricePerThousand: MoneyDto;
+  readonly valuePerThousand: MoneyDto;
+  /** True until the creator sets their own rate: the worth figures use an example. */
+  readonly valueIsDefault: boolean;
+  readonly postBudget: MoneyDto;
+  readonly languages: readonly {
+    readonly code: string;
+    readonly name: string;
+    readonly flag: string;
+    readonly roleLabel: string;
+    /** 'learned': from the creator's own earlier posts. 'estimate': from public figures. */
+    readonly source: 'learned' | 'estimate';
+    readonly views: { readonly low: number; readonly likely: number; readonly high: number };
+    readonly breakEvenViews: number;
+    readonly youPay: MoneyDto;
+    readonly worth: MoneyDto;
+  }[];
+  readonly totals: {
+    readonly dubCost: MoneyDto;
+    readonly views: { readonly low: number; readonly likely: number; readonly high: number };
+    readonly youPayLow: MoneyDto;
+    readonly youPayLikely: MoneyDto;
+    readonly youPayHigh: MoneyDto;
+    readonly worth: MoneyDto;
+    readonly net: MoneyDto;
+  };
+  /** The same plan if the video took off to `views` views. */
+  readonly takeOff: {
+    readonly views: number;
+    readonly dubViews: number;
+    readonly youPay: MoneyDto;
+    readonly worth: MoneyDto;
+    readonly net: MoneyDto;
+  };
+  /** Where the numbers come from, in one sentence. */
+  readonly basis: string;
+}
+
 /** POST /api/extension/audience - demo servers only. */
 export interface ExtensionAudienceRequestDto {
   readonly postId: string;

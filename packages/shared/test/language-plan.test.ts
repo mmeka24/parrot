@@ -72,3 +72,33 @@ describe('money maths', () => {
     expect(addPnl([win, flop]).paid).toBe(parseUsd('4.02'));
   });
 });
+
+import { expectedCharge, forecastViews, languageEconomics, learnedForecast } from '../src/index.js';
+
+describe('forecast', () => {
+  it('reproduces the worked example: 1.2M views, Spanish, about 680', () => {
+    const f = forecastViews(1_200_000, 'es');
+    expect(f.likely).toBeGreaterThan(600);
+    expect(f.likely).toBeLessThan(760);
+    expect(f.low).toBeLessThan(f.likely);
+    expect(f.high).toBeGreaterThan(f.likely);
+  });
+
+  it('expects almost nothing from a video nobody has seen, and never negative', () => {
+    expect(forecastViews(8, 'es').likely).toBe(0);
+    expect(forecastViews(-5, 'es').likely).toBe(0);
+    expect(forecastViews(1_000_000, 'zz').likely).toBe(0);
+  });
+
+  it('gives bigger markets bigger forecasts', () => {
+    expect(forecastViews(1_000_000, 'ja').likely).toBeGreaterThan(forecastViews(1_000_000, 'hi').likely);
+  });
+
+  it('never charges past the budget, and values views at the creator rate', () => {
+    expect(expectedCharge(10_000_000, parseUsd('5'))).toBe(parseUsd('5'));
+    const eco = languageEconomics({ forecast: learnedForecast(2000), dubCost: parseUsd('0.975'), valuePerThousand: parseUsd('8'), budget: parseUsd('5') });
+    expect(eco.youPay.likely).toBe(parseUsd('2'));
+    expect(eco.worthLikely).toBe(parseUsd('16'));
+    expect(eco.breakEven).toBe(975);
+  });
+});

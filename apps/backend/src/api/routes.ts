@@ -125,7 +125,8 @@ export function createApp(deps: RouteDeps): Express {
    */
   function canEdit(req: Request, creator: Creator): boolean {
     if (creator.userId !== null) return deps.accounts?.userFor(req)?.id === creator.userId;
-    return deps.mockX !== null;
+    // A demo server (Chirp, or the extension's demo mode): no sign-in, anyone may drive it.
+    return deps.mockX !== null || deps.demoAudience !== null;
   }
 
   /** Refuse a state-changing request from a page that is not ours. */

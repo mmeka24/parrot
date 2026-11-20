@@ -112,7 +112,8 @@ export function demoViewsFor(input: {
 
 export interface DemoAudienceDeps {
   readonly store: Store;
-  readonly mockX: MockXAdapter;
+  /** The stand-in timeline, when there is one. Without it, only thread-less dubs get an audience. */
+  readonly mockX: MockXAdapter | null;
   /** Called after each wave, so view counts and dashboards catch up. */
   readonly afterWave: () => Promise<void>;
 }
@@ -178,7 +179,7 @@ export class DemoAudience {
     // extension on x.com) has no post to count on, so they are counted on the
     // dub directly. Either way they are labelled simulated.
     let direct = 0;
-    if (dub.replyPostId) {
+    if (dub.replyPostId && mockX) {
       mockX.addViews(dub.replyPostId, views);
       const interactions = views * INTERACTIONS_PER_VIEW.likely;
       mockX.addEngagement(dub.replyPostId, Math.round(interactions * 0.82), Math.round(interactions * 0.13));
@@ -204,7 +205,7 @@ export class DemoAudience {
     const { store, mockX } = this.deps;
     const dub = store.getDub(dubId) as Dub | undefined;
     // No thread, nothing to reply under.
-    if (!dub?.replyPostId) return;
+    if (!dub?.replyPostId || !mockX) return;
     const lines = SAMPLE_REPLIES[dub.lang] ?? [];
     const names = VIEWER_NAMES[dub.lang] ?? [];
     const count = Math.min(lines.length, names.length, views >= 1_000 ? 3 : views >= 200 ? 2 : views >= 40 ? 1 : 0);

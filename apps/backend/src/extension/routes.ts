@@ -32,6 +32,7 @@ import {
   type ExtensionDubAcceptedDto,
   type ExtensionDubDto,
   type ExtensionResultsDto,
+  type ExtensionForecastDto,
   type ExtensionPostStatusDto,
   type ExtensionStatusResponseDto,
 } from '@parrot/shared';
@@ -52,6 +53,8 @@ export interface ExtensionDeps {
    * are not wanted (tests).
    */
   dubObservedPost?: (post: ObservedPost, targetLang: string | null) => Promise<string>;
+  /** What a post is expected to get, before it is dubbed. Null when it cannot be worked out. */
+  forecast?: (post: ObservedPost) => ExtensionForecastDto | null;
   /** The numbers under a dubbed post. Null when the post has not been dubbed. */
   results?: (postId: string) => ExtensionResultsDto | null;
   /**
@@ -141,6 +144,17 @@ export function registerExtensionRoutes(app: Express, deps: ExtensionDeps): void
     const posts = await Promise.all([...new Set(ids)].map((id) => statusFor(id)));
     const payload: ExtensionStatusResponseDto = { posts };
     res.json(payload);
+  });
+
+  app.get('/api/extension/forecast', (req, res) => {
+    const postId = String(req.query.postId ?? '');
+    const nothing = badRequest('No estimate yet', 'Parrot needs to have seen the video, and know how long it is.');
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(postId) || !deps.forecast) return res.status(404).json(nothing);
+    const post = store.observedPosts.get(postId);
+    if (!post) return res.status(404).json(nothing);
+    const forecast = deps.forecast(post);
+    if (!forecast) return res.status(404).json(nothing);
+    res.json(forecast);
   });
 
   app.get('/api/extension/results', (req, res) => {

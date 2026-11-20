@@ -11,6 +11,7 @@ import type {
   ExtensionAudienceRequestDto,
   ExtensionConfigDto,
   ExtensionDubRequestDto,
+  ExtensionForecastDto,
   ExtensionObservedPostDto,
   ExtensionResultsDto,
   ExtensionStatusResponseDto,
@@ -21,6 +22,7 @@ export type Request =
   | { readonly type: 'posts'; readonly ids: readonly string[] }
   | { readonly type: 'observe'; readonly posts: readonly ExtensionObservedPostDto[] }
   | { readonly type: 'request'; readonly body: ExtensionDubRequestDto }
+  | { readonly type: 'forecast'; readonly postId: string }
   | { readonly type: 'results'; readonly postId: string }
   | { readonly type: 'audience'; readonly body: ExtensionAudienceRequestDto }
   | { readonly type: 'getServer' }
@@ -35,6 +37,7 @@ export interface ResponseMap {
   setServer: string;
   observe: unknown;
   request: unknown;
+  forecast: ExtensionForecastDto;
   results: ExtensionResultsDto;
   audience: unknown;
 }
