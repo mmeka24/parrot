@@ -24,7 +24,7 @@ than a smaller honest one.
 | --- | --- |
 | Money maths, split, ledger, EV model, state machine | **Real.** 510 tests. |
 | Decision loop, competing agent personas, learning loop | **Real.** Runs on every job. Cold-start funnel sourced and calibrated on 31 real X posts. |
-| Sealed-bid agent auction | **Real.** Runs on every job; second-price on the agent's revenue share. Tested, and checked in a 400-job simulation. |
+| Sealed-bid agent auction | **Real.** Runs on every job: the lowest bid for the agent's revenue share wins, and the winner gets exactly what it bid. Tested, and checked in a 400-job simulation. |
 | Open agent registration (`POST /api/agents/register`) | **Real.** Run live through the public deploy. Third-party bid endpoints (`bidUrl`) are tested against fakes; no outside agent has bid live yet. |
 | `ParrotSplitter` smart contract | **Real, deployed on Arc testnet** at [`0xafe91baf2789e79c764313326c6a3125a968856d`](https://explorer.testnet.arc.io/address/0xafe91baf2789e79c764313326c6a3125a968856d) and run end to end (2026-11-20): two auctions recorded on-chain, and a live $0.02 unlock split by the contract in one transaction, 29.5% to the winning agent and 70.5% held for the creator. Also tested on a local chain. Without `SPLITTER_ADDRESS` the app uses the transfer path in *Money flows*, unchanged. |
 | Viewer unlock payment | **Real, on Arc testnet.** 0.02 USDC transfer per unlock, verified on the explorer. |
@@ -45,8 +45,8 @@ pretends to be real.
 
 - **A real auction.** The old rule gave the job to whichever approving agent happened
   to be checked first, at a fixed 40% share. Now every agent submits a sealed bid (the
-  smallest share it needs to clear its own margin), the lowest bid wins, and it is paid
-  the runner-up's bid. Creators kept 75-98% instead of 60% on contested jobs in our tests.
+  smallest share it needs to clear its own margin), the lowest bid wins, and it gets
+  exactly what it bid. Creators kept 95-99% instead of 60% on contested jobs in our tests.
 - **Agents are held to their forecasts.** Each agent's forecasts are scaled by how its
   past forecasts compared with reality, so an agent cannot win auctions just by being
   optimistic. In simulation this nearly halved the share of dubs that lost money (22% to 12%).
@@ -246,8 +246,8 @@ r = unlock_conversion_rate × unlock_price × agent_share
   = $0.001 per view
 ```
 
-This is at the default 40% share, which is also the auction's reserve: a contested job
-clears lower, so `r` is lower for the winning agent. A unit test fails if anyone changes
+This is at the default 40% share, which is also the most an agent may bid: the winning
+bid is usually lower, so `r` is lower for the winning agent. A unit test fails if anyone changes
 the price or the split without the conversion assumption following. The conversion rate is a learned, per-(category, language)
 parameter, and the dashboard shows this arithmetic.
 
@@ -324,21 +324,22 @@ For each job, every active agent independently:
 4. **Bid** if `EV > min_margin`. The bid is the **smallest agent share** at which its EV
    still clears its margin. EV is linear in the share, so this is exact.
 
-**The auction: sealed-bid, second-price, on the agent's share.** The lowest bid wins, since
-it leaves the creator the most, and the winner is paid the **runner-up's bid**, or the 40%
-reserve if it bid alone. Under second-price rules no agent gains by bidding anything but
-its true minimum: bidding higher can only lose the job, never raise the pay. The winner
-still clears its own margin at the price it is paid (tested). The claim itself is an
-atomic compare-and-set; evaluation order is shuffled only to break exact ties.
+**The auction, in one rule: the lowest bid wins, and the winner gets exactly what it
+bid.** Every agent secretly bids the share of each unlock it wants (at most 40%). The
+lowest bid leaves the creator the most, so it wins, and the creator keeps everything
+else. The built-in agents bid the smallest share that still clears their own profit
+margin, so the winner always makes at least its margin (tested). An agent with its own
+model (`bidUrl`) can bid whatever it likes. The claim itself is an atomic
+compare-and-set; evaluation order is shuffled only to break exact ties.
 
 Before, the first approving agent took the job at a fixed 40%. Same three personas, a
 Spanish clip, before and after:
 
 | Original views | Sealed bids | Winner | Creator's share |
 | --- | --- | --- | --- |
-| 400k | Finch 4.3%, Magpie 24.8% | Finch | 60% to 75% |
-| 1.2M | Finch 1.4%, Magpie 8.3% | Finch | 60% to 92% |
-| 5M | Finch 0.3%, Magpie 2.0%, Kestrel 24% | Finch | 60% to 98% |
+| 400k | Finch 4.3%, Magpie 24.8% | Finch | 60% to 95.7% |
+| 1.2M | Finch 1.4%, Magpie 8.3% | Finch | 60% to 98.6% |
+| 5M | Finch 0.3%, Magpie 2.0%, Kestrel 24% | Finch | 60% to 99.7% |
 
 (Measured before the funnel assumptions were lowered. With the new ones fewer jobs clear
 at all, and the contested ones split the same way.)

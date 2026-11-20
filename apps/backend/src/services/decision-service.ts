@@ -113,7 +113,7 @@ export interface DecisionOutcome {
 }
 
 export interface AuctionResult {
-  /** The agent share the winner is paid: the runner-up's bid, or the reserve. */
+  /** The agent share the winner is paid: its own (lowest) bid. */
   readonly clearingBps: number;
   readonly reserveBps: number;
   /** Every sealed bid, lowest (winning) first. */
@@ -297,12 +297,10 @@ export class DecisionService {
       return agent.bidUrl ? this.withExternalBid(bid, externalBids.get(agent.id) ?? null) : bid;
     });
 
-    // SEALED-BID REVERSE AUCTION (second-price) on the agent's revenue share.
-    // Each approving agent bids the smallest share it needs to clear its own
-    // margin. The lowest bid wins and is paid the SECOND-lowest bid (or the
-    // reserve, job.splitAgentBps, if it bid alone). Under second-price rules
-    // bidding your true minimum is the best strategy, and competition hands
-    // the surplus to the creator instead of to whichever agent ran first.
+    // SEALED-BID AUCTION on the agent's revenue share, kept simple: each
+    // approving agent bids the share it wants (never above the job's 40%
+    // reserve), the LOWEST bid wins, and the winner gets exactly what it bid.
+    // The creator keeps the rest.
     const reserveBps = job.splitAgentBps;
     const priced = bids
       .filter((b) => b.approved)
@@ -314,7 +312,7 @@ export class DecisionService {
 
     const best = priced[0];
     if (best && this.store.claimJob(job.id, best.bid.agent.id)) {
-      const clearingBps = Math.min(priced[1]?.bidBps ?? reserveBps, reserveBps);
+      const clearingBps = best.bidBps; // the winner is paid its own bid
       this.store.updateJob(job.id, {
         splitAgentBps: clearingBps,
         splitCreatorBps: 10_000 - clearingBps,
@@ -329,10 +327,11 @@ export class DecisionService {
         ...best.bid.decision,
         inputs: { ...best.bid.decision.inputs, agentBps: clearingBps },
         rationale:
-          `${best.bid.decision.rationale} Auction: I bid a ${pctBps(best.bidBps)} share` +
+          `${best.bid.decision.rationale} Auction: I bid a ${pctBps(clearingBps)} share` +
           (others > 0
-            ? ` and beat ${others} other bid${others === 1 ? '' : 's'}; I am paid the runner-up's ${pctBps(clearingBps)}, so the creator keeps ${pctBps(10_000 - clearingBps)}.`
-            : `, the only bid, so I take the ${pctBps(reserveBps)} reserve.`),
+            ? `, the lowest of ${others + 1} bids, so I win`
+            : `, the only bid, so I win`) +
+          ` and the creator keeps ${pctBps(10_000 - clearingBps)}.`,
       };
       return { winner: best.bid.agent, winningDecision, bids, declineReason: null, auction };
     }

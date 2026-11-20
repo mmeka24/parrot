@@ -446,8 +446,8 @@ describe('the auction', () => {
   });
 });
 
-describe('the sealed-bid auction (second price, on the agent share)', () => {
-  it('the lowest bid wins and is paid the runner-up bid, so the creator keeps more', () => {
+describe('the sealed-bid auction (lowest bid wins, paid its own bid)', () => {
+  it('the lowest bid wins and is paid exactly its bid, so the creator keeps more', () => {
     const { store, service } = makeStore();
     addAgent(store, { name: 'Lean', minMargin: parseUsd('0.01') });
     addAgent(store, { name: 'Mid', minMargin: parseUsd('0.05') });
@@ -460,7 +460,7 @@ describe('the sealed-bid auction (second price, on the agent share)', () => {
 
     expect(outcome.winner?.name).toBe('Lean');
     expect(first!.bidBps).toBeLessThanOrEqual(second!.bidBps);
-    expect(auction.clearingBps).toBe(second!.bidBps);
+    expect(auction.clearingBps).toBe(first!.bidBps);
     const saved = store.getJob(job.id)!;
     expect(saved.splitAgentBps).toBe(auction.clearingBps);
     expect(saved.splitAgentBps + saved.splitCreatorBps).toBe(10_000);
@@ -478,12 +478,13 @@ describe('the sealed-bid auction (second price, on the agent share)', () => {
     expect(BigInt(won.decision.result.evMicros)).toBeGreaterThan(BigInt(won.decision.inputs.minMarginMicros));
   });
 
-  it('a lone bidder takes the reserve share, exactly as before', () => {
+  it('a lone bidder is also paid its own bid, never more than the 40% cap', () => {
     const { store, service } = makeStore();
     addAgent(store, { name: 'Solo', minMargin: parseUsd('0.01') });
     const job = workedExampleJob(store);
     const outcome = service.runAuction(job);
-    expect(outcome.auction?.clearingBps).toBe(DEFAULT_SPLIT_AGENT_BPS);
+    expect(outcome.auction?.clearingBps).toBe(outcome.auction?.bids[0]?.bidBps);
+    expect(outcome.auction!.clearingBps).toBeLessThanOrEqual(DEFAULT_SPLIT_AGENT_BPS);
     expect(outcome.winningDecision?.rationale).toMatch(/only bid/);
   });
 
