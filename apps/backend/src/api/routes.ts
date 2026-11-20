@@ -142,6 +142,18 @@ export function createApp(deps: RouteDeps): Express {
   // Viewer identity: a cookie, created silently. No wallet, no sign-in.
   // -------------------------------------------------------------------------
 
+  /**
+   * Behind https the web app and this server are different sites (Vercel and
+   * Fly), so the session cookie must be SameSite=None; Secure or the browser
+   * drops it. On plain http (local development) Lax is right and None would be
+   * rejected.
+   */
+  function cookieFlags(): string {
+    return getConfig().env.PUBLIC_BACKEND_URL.startsWith('https://')
+      ? 'SameSite=None; Secure'
+      : 'SameSite=Lax';
+  }
+
   function currentViewer(req: Request, res: Response, create: boolean): string | null {
     const existing = readCookie(req, VIEWER_COOKIE);
     if (existing && store.getAccount(existing)) return existing;
@@ -156,7 +168,7 @@ export function createApp(deps: RouteDeps): Express {
     payments.grantStarterCredit(account.id);
     res.setHeader(
       'Set-Cookie',
-      `${VIEWER_COOKIE}=${account.id}; Path=/; Max-Age=2592000; SameSite=Lax`,
+      `${VIEWER_COOKIE}=${account.id}; Path=/; Max-Age=2592000; ${cookieFlags()}`,
     );
     return account.id;
   }
@@ -456,6 +468,23 @@ export function createApp(deps: RouteDeps): Express {
   // -------------------------------------------------------------------------
   // Demo controls
   // -------------------------------------------------------------------------
+
+  // The write routes move money and rewrite state. In production they are
+  // closed unless an admin token is configured and presented.
+  app.use('/api/demo', (req, res, next) => {
+    if (req.method === 'GET' || req.method === 'OPTIONS') return next();
+    const { NODE_ENV, DEMO_ADMIN_TOKEN } = getConfig().env;
+    if (NODE_ENV !== 'production') return next();
+    if (!DEMO_ADMIN_TOKEN || req.headers['x-admin-token'] !== DEMO_ADMIN_TOKEN) {
+      return res.status(403).json({
+        ok: false,
+        code: 'BAD_REQUEST',
+        title: 'Not available',
+        detail: 'Demo controls are turned off on this server.',
+      });
+    }
+    next();
+  });
 
   let trafficTimer: NodeJS.Timeout | null = null;
   let ratePerMinute = 60;

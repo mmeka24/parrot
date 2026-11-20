@@ -16,6 +16,7 @@ export const localCopy = {
     leaderboard: 'Leaderboard',
     console: 'Bot console',
     underTheHood: 'Under the hood',
+    extension: 'Get the extension',
     menu: 'Menu',
     close: 'Close',
     skipToContent: 'Skip to content',
