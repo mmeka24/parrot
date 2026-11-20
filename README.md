@@ -28,6 +28,45 @@ views, the language plan and the payments move. Things to know about the live de
   cannot be dubbed.
 - It is hosted on Fly.io (config in `fly*.toml`).
 
+## On Arc: what moves on-chain, and what does not
+
+All of it is **Arc testnet** (chain 5042002); the USDC has no real value. Parrot deploys **no
+smart contracts**: it uses Arc's existing USDC (`0x3600000000000000000000000000000000000000`)
+through its ordinary ERC-20 transfer.
+
+| Money flow | On Arc? | How it works |
+| --- | --- | --- |
+| **A creator pays for views** (signed-in creator) | **Yes** | One USDC transfer per creator per billing batch, from the creator's own Arc wallet to Parrot's revenue address. Each charge has a **Verify on Arc** link to its transaction. |
+| **The $1.00 welcome balance** | **Yes** | When someone signs up, a USDC transfer sends $1.00 from Parrot's Treasury to their new wallet. Once per person, at most 25 new wallets a day, and the Treasury always keeps a $1 reserve. |
+| **Each user's wallet** | **Yes** | A real Arc address per signed-in user, created by Parrot and held by Parrot (custodial: the key is encrypted at rest). The user never handles a key. |
+| Demo creators' charges | No | A labelled test balance in Parrot's own books. No money moves and there is no link. |
+| The ElevenLabs bill for each dub | No | Paid in fiat by Parrot and recorded in its books. |
+| Counting views, the language planner, quality checks | No | These run on the Parrot server. |
+
+**How a per-view payment stays honest.** A creator is charged only for views Parrot has counted,
+never more than the post's budget (default $5.00) and never more than the wallet can pay (a
+small reserve is kept back for Arc's network fee, which is paid in USDC from the same balance).
+Money moves in batches, one payment per creator per sweep, so a busy post is one transaction
+and not thousands. A dub's views are marked as billed **only after its payment confirms on
+Arc**, so a failed payment is retried and a landed payment is not charged twice.
+
+**Why no contract.** One batched USDC transfer per creator is all the money movement the product
+needs, and a contract would add risk without adding anything a reader could verify. (An earlier
+version split every viewer payment through a custom splitter contract; this product has no
+per-viewer payments, so it was removed.)
+
+**Where to look.**
+[Revenue address](https://explorer.testnet.arc.io/address/0x852Ad1a5A355553e0379D339D9AEdbAC8282d951)
+(receives creator payments) ·
+[Treasury](https://explorer.testnet.arc.io/address/0x373182286E60D2fe26b25816372a54D18d9A54AF)
+(funds new wallets) ·
+[USDC](https://explorer.testnet.arc.io/address/0x3600000000000000000000000000000000000000).
+
+**Status, stated plainly.** Funding a new wallet from the Treasury has been run live on testnet
+and checked on-chain. Charging a creator per view from their own wallet is implemented and
+covered by unit tests, but has not yet been run end to end on the live deployment. Wallets are
+custodial and testnet only; real-money use would need non-custodial wallets and an audit.
+
 ## What is real and what is not
 
 | Part | Status |
@@ -35,8 +74,8 @@ views, the language plan and the payments move. Things to know about the live de
 | Language planner (explore, then focus on winners), P&L maths, billing | **Real.** Pure, tested (318 tests). |
 | ElevenLabs dubbing | **Real** with `ELEVENLABS_API_KEY`; otherwise a labelled stand-in. Seeded demo posts have no footage, so their dubs are always stand-ins. |
 | Quality check | **Real and fail-closed.** ffmpeg measures; xAI/Grok hears and judges meaning. ElevenLabs never grades its own dubs. |
-| Creator payments on Arc | **Real** for signed-in creators (own Arc wallet, USDC transfer per billing batch, "Verify on Arc" link). Demo creators pay from a labelled test balance with no link. |
-| Sign-up wallets | Email/Google sign-in creates a custodial Arc wallet funded with testnet USDC. Needs `WALLET_ENCRYPTION_KEY`, treasury key and a mailer; otherwise off. |
+| Creator payments on Arc | **Real on-chain** for signed-in creators (own Arc wallet, USDC transfer per billing batch, "Verify on Arc" link). Demo creators pay from a labelled test balance with no link. See [On Arc](#on-arc-what-moves-on-chain-and-what-does-not). |
+| Sign-up wallets | **Real on-chain.** Google or email sign-in creates a custodial Arc wallet and sends it $1.00 of testnet USDC from the Treasury. Needs `WALLET_ENCRYPTION_KEY`, the Treasury key and a sign-in method; otherwise off. |
 | Views | Each dub is its own post; its view count is read back from the timeline. Viewer country comes only from Parrot's own dub page. |
 | Demo audience | **Simulated and labelled.** Each demo creator has a hidden taste per language; the planner has to discover it. |
 | Timeline | **Chirp**, a local stand-in for X. X API adapter is written but never called. Extension is built for x.com but untested there. |
@@ -91,6 +130,6 @@ Alternate dubbed and undubbed posts across 5-10 real accounts for 2-3 weeks (10+
 
 ## Bounty notes
 
-- **Arc:** creator payments are USDC transfers on Arc testnet; per-user Arc wallets; contract-free (existing USDC at `0x3600000000000000000000000000000000000000`).
+- **Arc:** creators pay for views with real USDC transfers on Arc testnet from their own per-user Arc wallets, one batched payment per creator with a Verify on Arc link; new wallets are funded by an on-chain Treasury transfer. Contract-free (existing USDC at `0x3600000000000000000000000000000000000000`). Not everything is on-chain, and the [On Arc](#on-arc-what-moves-on-chain-and-what-does-not) section says exactly what is and is not.
 - **ElevenLabs:** the Dubbing API makes every dub; central, not an add-on.
 - **Grok Bot:** we use the xAI API (Grok) for QC judging, request parsing, reply-language reading and summaries. This is **not** the Grok Bot assistant inside X, so this bounty may not apply as written; a chat export is still required.
