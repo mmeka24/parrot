@@ -196,6 +196,20 @@ export function loadDotEnv(path = resolve(REPO_ROOT, '.env')): boolean {
   }
 }
 
+/**
+ * An agent persona's signing key, if one is configured. The agent fronts its
+ * dub cost from this wallet, so its spending is visible on-chain.
+ */
+export function agentPrivateKey(agentName: string): `0x${string}` | undefined {
+  const env = getConfig().env;
+  const keys: Record<string, string | undefined> = {
+    Magpie: env.AGENT_MAGPIE_PRIVATE_KEY,
+    Kestrel: env.AGENT_KESTREL_PRIVATE_KEY,
+    Finch: env.AGENT_FINCH_PRIVATE_KEY,
+  };
+  return keys[agentName] as `0x${string}` | undefined;
+}
+
 export function getConfig(): Config {
   cached ??= loadConfig();
   return cached;

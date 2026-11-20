@@ -206,7 +206,11 @@ function DecisionCard({ entry }: { entry: DecisionLogEntryDto }) {
     >
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
         <span className={approved ? 'chip chip-teal' : 'chip chip-berry'}>
-          {approved ? localCopy.dashboard.approved : localCopy.dashboard.declined}
+          {!approved
+            ? localCopy.dashboard.declined
+            : entry.won
+              ? localCopy.dashboard.approved
+              : localCopy.dashboard.outbid}
         </span>
         <strong style={{ fontSize: '0.95rem' }}>{entry.agentName}</strong>
         <span style={{ color: 'var(--ink-soft)', fontSize: '0.85rem' }}>

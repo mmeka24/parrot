@@ -56,7 +56,12 @@ function addAgent(
   return agent;
 }
 
-/** The brief's worked example: a 30s clip, 10k views, strong engagement. */
+/**
+ * The worked example: a 30s clip that went viral - 1.2M views. Through the
+ * sourced funnel that is ~2,400 likely Spanish viewers, close to the brief's
+ * 2,000. (The brief's original 10k-view post only yields ~20, which no 2-cent
+ * dub can pay back.)
+ */
 function workedExampleJob(store: Store, overrides: Partial<Job> = {}): Job {
   const account = store.createAccount({
     kind: 'creator',
@@ -95,11 +100,11 @@ function workedExampleJob(store: Store, overrides: Partial<Job> = {}): Job {
     declineReason: null,
     failureReason: null,
     signals: {
-      likes: 800,
-      replies: 120,
-      reposts: 200,
-      quotes: 40,
-      sourceViews: 10_000,
+      likes: 18_000,
+      replies: 640,
+      reposts: 2_900,
+      quotes: 210,
+      sourceViews: 1_200_000,
       authorFollowers: 50_000,
       ageHours: 2,
     },
@@ -267,18 +272,17 @@ describe('persona differences', () => {
       optimismPpm: 1_350_000,
     });
 
-    // A middling post, tuned to land in the gap where the personas disagree.
-    // A 30s dub costs $0.25, so with r = $0.001/view and p_success 0.7 the
-    // optimist (1.35x) needs ~286+ predicted views to clear its $0.02 margin,
-    // while the sceptic (0.8x) would need ~1,520+ to clear its $0.60 one.
-    // These signals predict roughly 590, which sits squarely between them.
+    // A middling post: 150k views. A 30s dub costs $0.25 and each dub viewer
+    // is worth $0.0007 (12.5% unlock x $0.02 x 40% x 0.7), so:
+    //   cautious, low case:  ~61 viewers   -> about -$0.21, short of its $0.60 margin
+    //   bold, high case:    ~1,360 viewers -> about +$0.70, clears its $0.02 margin
     const job = workedExampleJob(store, {
       signals: {
-        likes: 300,
-        replies: 40,
-        reposts: 50,
-        quotes: 10,
-        sourceViews: 3_000,
+        likes: 2_600,
+        replies: 90,
+        reposts: 380,
+        quotes: 30,
+        sourceViews: 150_000,
         authorFollowers: 20_000,
         ageHours: 3,
       },

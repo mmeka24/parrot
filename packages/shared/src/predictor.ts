@@ -15,9 +15,14 @@
 import {
   BUCKET_CONFIDENCE_N,
   COLD_START_CONVERSION,
+  DUB_UPTAKE,
+  INTERACTIONS_PER_VIEW,
   LEARNING_ALPHA,
+  MARKET_REACH,
+  X_AD_REACH_MILLIONS,
   languageByCode,
   type Category,
+  type FunnelRange,
 } from './constants.js';
 import { clampPpm, ppm, smoothCount, smoothPpm, type Ppm } from './ppm.js';
 
@@ -46,8 +51,14 @@ export interface BucketStats {
   readonly n: number;
 }
 
+/** Which point of a prediction's range an agent plans on. */
+export type Scenario = 'low' | 'likely' | 'high';
+
 export interface Prediction {
+  /** The likely case. Same as `range.likely`. */
   readonly predictedViews: number;
+  /** Dub viewers in the cautious, likely and optimistic cases. */
+  readonly range: FunnelRange;
   readonly conversionPpm: Ppm;
   /** 0..1e6. Driven by bucket sample size. */
   readonly confidencePpm: Ppm;
@@ -75,31 +86,65 @@ export function engagementScore(signals: EngagementSignals): number {
   return interactions * (1 + reach / 4) * freshness;
 }
 
+/** One step of the cold-start funnel, kept for the decision log. */
+export interface FunnelStep {
+  readonly label: string;
+  readonly range: FunnelRange;
+}
+
+export interface FunnelEstimate {
+  /** Dub viewers at the end of the funnel. */
+  readonly viewers: FunnelRange;
+  /** People who saw the original post (read from X, or estimated). */
+  readonly reach: FunnelRange;
+  readonly reachMeasured: boolean;
+  /** Share of X's audience in markets that prefer the target language. */
+  readonly languageShare: number;
+}
+
 /**
- * Cold-start prior: engagement converted to international views by market size.
+ * Cold-start funnel: how many people will open a dub of this post, built from
+ * steps that each have a stated source (see constants.ts):
  *
- * There are two independent estimators of the same quantity here - one from
- * interaction counts, one from the post's own view count - so they are AVERAGED,
- * not added. Adding them double-counts reach: a post with 10k views and the
- * engagement that produced those 10k views is one audience, not two.
+ *   1. people who saw the post      - X's own view count; if missing, its
+ *                                     interactions / a measured per-view rate
+ *   2. x share of X in that language - DataReportal ad reach by country
+ *   3. x how well the post reaches it - ASSUMPTION, learned over time
+ *   4. x how many open the dub        - ASSUMPTION, learned over time
  *
- * Anchor: the brief's worked example. A 30s clip with ~10k source views and
- * strong engagement should land near 2,000 Spanish viewers. The coefficients are
- * fitted to that single anchor point and are explicitly a guess until the
- * learning loop has real data.
+ * Each step carries a low / likely / high range and the ranges multiply, so the
+ * spread is honest about how little a cold start knows.
+ *
+ * This replaced a formula fitted to one worked example (10k views -> 2,000
+ * Spanish viewers). Built from sourced steps, the same post gives ~20 viewers:
+ * the honest conclusion is that a 2-cent dub only pays on posts with hundreds
+ * of thousands of views, and the agents now behave that way.
  */
-function coldStartViews(signals: EngagementSignals, lang: string): number {
-  const score = engagementScore(signals);
-  const market = languageByCode(lang)?.marketSize ?? 0.3;
+export function funnelEstimate(signals: EngagementSignals, lang: string): FunnelEstimate {
+  const { likes, replies, reposts, quotes = 0, sourceViews } = signals;
+  const reachMeasured = sourceViews !== undefined && sourceViews > 0;
 
-  const fromEngagement = score * 0.42;
+  const interactions = likes + replies + reposts + quotes;
+  const reach: FunnelRange = reachMeasured
+    ? { low: sourceViews, likely: sourceViews, high: sourceViews }
+    : {
+        low: interactions / INTERACTIONS_PER_VIEW.low,
+        likely: interactions / INTERACTIONS_PER_VIEW.likely,
+        high: interactions / INTERACTIONS_PER_VIEW.high,
+      };
 
-  const estimate =
-    signals.sourceViews !== undefined && signals.sourceViews > 0
-      ? (fromEngagement + signals.sourceViews * 0.2) / 2
-      : fromEngagement;
+  const millions = languageByCode(lang)?.xAudienceMillions ?? 5;
+  const languageShare = millions / X_AD_REACH_MILLIONS;
 
-  return Math.max(0, Math.round(estimate * market));
+  const at = (k: keyof FunnelRange) =>
+    Math.max(0, Math.round(reach[k] * languageShare * MARKET_REACH[k] * DUB_UPTAKE[k]));
+
+  return {
+    viewers: { low: at('low'), likely: at('likely'), high: at('high') },
+    reach,
+    reachMeasured,
+    languageShare,
+  };
 }
 
 export function predictViews(
@@ -110,13 +155,21 @@ export function predictViews(
   const langName = languageByCode(lang)?.englishName ?? lang;
 
   if (!bucket || bucket.n === 0 || bucket.avgEngagementScore <= 0) {
-    const predictedViews = coldStartViews(signals, lang);
+    const f = funnelEstimate(signals, lang);
+    const seen = Math.round(f.reach.likely).toLocaleString();
+    const share = `${(f.languageShare * 100).toFixed(1)}%`;
     return {
-      predictedViews,
+      predictedViews: f.viewers.likely,
+      range: f.viewers,
       conversionPpm: COLD_START_CONVERSION,
       confidencePpm: ppm(250_000),
       basis: 'cold_start',
-      rationale: `No history for ${langName} in this category yet, so this is an estimate from the post's engagement and the size of the ${langName} audience: about ${predictedViews.toLocaleString()} viewers.`,
+      rationale:
+        `No ${langName} history in this category yet, so I worked it out step by step. ` +
+        `${f.reachMeasured ? `${seen} people saw the post` : `About ${seen} people likely saw the post (estimated from its likes and reposts)`}. ` +
+        `${share} of X's audience is in ${langName}-speaking markets, an English post reaches about ${pct(MARKET_REACH.likely)} of its usual share of them, ` +
+        `and about ${pct(DUB_UPTAKE.likely)} of those would open a dub. ` +
+        `That is about ${f.viewers.likely.toLocaleString()} viewers (somewhere between ${f.viewers.low.toLocaleString()} and ${f.viewers.high.toLocaleString()}).`,
     };
   }
 
@@ -132,13 +185,27 @@ export function predictViews(
   const comparison =
     ratio >= 1.15 ? 'stronger than' : ratio <= 0.85 ? 'weaker than' : 'about the same as';
 
+  // The range narrows as the bucket fills: wide on a thin history, tight once
+  // it has BUCKET_CONFIDENCE_N observations.
+  const doubt = 1 - confidencePpm / 1_000_000;
+  const range: FunnelRange = {
+    low: Math.round(predictedViews * (0.85 - 0.45 * doubt)),
+    likely: predictedViews,
+    high: Math.round(predictedViews * (1.2 + 1.0 * doubt)),
+  };
+
   return {
     predictedViews,
+    range,
     conversionPpm: bucket.conversionPpm,
     confidencePpm,
     basis: 'bucket',
     rationale: `Past ${langName} dubs in this category averaged ${Math.round(bucket.avgViews).toLocaleString()} viewers. This post's engagement is ${comparison} those, so I expect about ${predictedViews.toLocaleString()}.`,
   };
+}
+
+function pct(x: number): string {
+  return `${Math.round(x * 100)}%`;
 }
 
 function clamp(value: number, min: number, max: number): number {

@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { X_TESTID, type XPostDto } from '@parrot/shared';
+import { DEMO_REACH_PRESETS, X_TESTID, type XPostDto } from '@parrot/shared';
 import { ApiError, createPost, uploadVideo } from '@/lib/api';
-import { formatClock } from '@/lib/format';
+import { formatClock, formatCount } from '@/lib/format';
 import { useSession } from '@/lib/session';
 import { Avatar } from './Avatar';
 import { ClipIcon, CloseIcon } from './icons';
@@ -52,6 +52,9 @@ export function Composer({
   const session = useSession();
   const [text, setText] = useState('');
   const [attachment, setAttachment] = useState<Attachment | null>(null);
+  // Demo reach for a video post. A post written a moment ago has no views, so
+  // the agents would pass on it; this gives it the reach a viral clip has.
+  const [reach, setReach] = useState<number>(1_200_000);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -96,6 +99,7 @@ export function Composer({
         authorHandle: session.me,
         inReplyToId: replyTo?.id ?? null,
         video: media && attachment ? { mediaId: media.mediaId, durationS: attachment.durationS } : null,
+        simulatedViews: media && !replyTo ? reach : null,
       });
       setText('');
       setAttachment(null);
@@ -140,6 +144,23 @@ export function Composer({
               <CloseIcon size={16} />
             </button>
           </div>
+        ) : null}
+
+        {attachment && !replyTo ? (
+          <label className="mb-2 flex items-center gap-2 text-[13px] text-dim">
+            Simulated reach (demo)
+            <select
+              value={reach}
+              onChange={(event) => setReach(Number(event.target.value))}
+              className="rounded-md border border-rule bg-transparent px-2 py-1 text-ink"
+            >
+              {DEMO_REACH_PRESETS.map((views) => (
+                <option key={views} value={views}>
+                  {formatCount(views)} views
+                </option>
+              ))}
+            </select>
+          </label>
         ) : null}
 
         {error ? (

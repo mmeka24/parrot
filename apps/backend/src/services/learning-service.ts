@@ -16,6 +16,7 @@
  */
 
 import {
+  funnelEstimate,
   updateBucket,
   predictionError,
   meanAbsolutePercentageError,
@@ -54,13 +55,15 @@ export class LearningService {
    * re-run cannot smooth the same observation into a bucket twice and quietly
    * bias it.
    */
-  resolve(jobId: string, options: { simulatedViews?: number } = {}): ResolveResult | null {
+  resolve(
+    jobId: string,
+    options: { simulatedViews?: number; simulatedUnlocks?: number } = {},
+  ): ResolveResult | null {
     const job = this.store.getJob(jobId);
     const prediction = this.store.getPrediction(jobId);
     if (!job || !prediction || prediction.resolvedAt !== null) return null;
 
-    const unlocks = this.store.unlocksForJob(jobId);
-    const actualUnlocks = unlocks.length;
+    const actualUnlocks = options.simulatedUnlocks ?? this.store.unlocksForJob(jobId).length;
 
     // Realised views. In demo mode we simulate them (clearly flagged); in a
     // real deployment this is where the X API view count would be read.
@@ -149,7 +152,13 @@ export class LearningService {
       const hasData = job.viewCount > 0 || this.store.unlocksForJob(job.id).length > 0;
       if (!hasData) continue;
 
-      const result = this.resolve(prediction.jobId);
+      // Demo mode compresses "24 hours later" into a minute, so the traffic so
+      // far is a fraction of a day's. Scoring against it would grade the demo's
+      // clock, not the agent (predicted 2,425, "actual" 24). Simulate the full
+      // day's outcome instead - flagged as simulated, like everything here.
+      const result = getConfig().isDemoMode
+        ? this.simulateOutcome(job)
+        : this.resolve(prediction.jobId);
       if (result) results.push(result);
     }
 
@@ -191,8 +200,21 @@ export class LearningService {
     if (!prediction) return null;
     // Deliberately imperfect: the demo is more honest, and more interesting,
     // when the agent is sometimes wrong.
+    // The simulated world is centred on the funnel's LIKELY case, not on the
+    // winning agent's own estimate - otherwise an optimist planning on the high
+    // end would always be "proved right" and the loop could never correct it.
+    const center = job.signals
+      ? funnelEstimate(job.signals, job.targetLang).viewers.likely
+      : prediction.predictedViews;
     const noise = 0.55 + Math.random() * 0.8;
-    const actualViews = Math.max(1, Math.round(prediction.predictedViews * noise * multiplier));
-    return this.resolve(job.id, { simulatedViews: actualViews });
+    const actualViews = Math.max(1, Math.round(center * noise * multiplier));
+    // Unlocks are simulated alongside views. Mixing simulated views with the
+    // handful of real unlocks so far would teach the bucket a near-zero
+    // conversion rate, and every later bid would be declined.
+    const conversionNoise = 0.7 + Math.random() * 0.6;
+    const actualUnlocks = Math.round(
+      actualViews * (prediction.predictedConvPpm / 1_000_000) * conversionNoise,
+    );
+    return this.resolve(job.id, { simulatedViews: actualViews, simulatedUnlocks: actualUnlocks });
   }
 }

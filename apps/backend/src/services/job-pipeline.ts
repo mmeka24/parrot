@@ -38,6 +38,7 @@ import type { Store } from '../store/store.js';
 import type { Job, Agent } from '../store/types.js';
 import { DecisionService, estimateDubCost } from './decision-service.js';
 import { PaymentService } from './payment-service.js';
+import { agentPrivateKey } from '../config.js';
 
 export interface PipelineHooks {
   /** Called after every accepted transition, for SSE and bot replies. */
@@ -311,6 +312,7 @@ export class JobPipeline {
       agentAccountId: agent.accountId,
       jobId: job.id,
       amount: dubCost,
+      agentPrivateKey: agentPrivateKey(agent.name),
     });
 
     let created: { providerJobId: string; simulated: boolean };

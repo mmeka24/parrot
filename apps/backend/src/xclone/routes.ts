@@ -22,6 +22,7 @@ import { mkdir, writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   mentionsHandle,
+  simulatedEngagement,
   type ApiErrorDto,
   type XCreatePostRequestDto,
   type XEngageRequestDto,
@@ -250,7 +251,15 @@ export function registerXCloneRoutes(app: Express, deps: XCloneDeps): void {
       return res.json(postDto(created));
     }
 
-    const created = mockX.createPost({ text, authorHandle, inReplyToPostId: inReplyToId, video });
+    // Demo reach: only for a top-level video post, and bounded. A fresh post
+    // has no views, and the agents would (correctly) never dub it.
+    const requestedViews = Number(body.simulatedViews ?? 0);
+    const metrics =
+      video !== null && inReplyToId === null && Number.isFinite(requestedViews) && requestedViews > 0
+        ? simulatedEngagement(Math.min(requestedViews, 50_000_000))
+        : null;
+
+    const created = mockX.createPost({ text, authorHandle, inReplyToPostId: inReplyToId, video, metrics });
     bumpReplies(inReplyToId);
     res.json(postDto(created));
   });

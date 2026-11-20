@@ -74,6 +74,76 @@ export const COLD_START_P_SUCCESS: Ppm = ppm(700_000); // 70%
 /** Cold-start view-to-unlock conversion before a bucket has history. */
 export const COLD_START_CONVERSION: Ppm = ppm(125_000); // 12.5%
 
+// ---------------------------------------------------------------------------
+// The cold-start funnel (predictor.ts). Each step is a low / likely / high
+// range, so a cautious agent can plan on the low end and a bold one on the
+// high end. Every number says where it comes from; the ones marked ASSUMPTION
+// are what the learning loop is there to correct.
+// ---------------------------------------------------------------------------
+
+/** One funnel step's range. `low` always means "fewer dub viewers". */
+export interface FunnelRange {
+  readonly low: number;
+  readonly likely: number;
+  readonly high: number;
+}
+
+/**
+ * Step 1 fallback, only when a post's view count is missing (X shows it on
+ * every post, so normally step 1 is read, not guessed): interactions per view.
+ * A HIGHER rate means FEWER views, so `low` holds the highest rate.
+ * Source: quartiles (p75 / median / p25) of 31 real English video posts on X,
+ * pulled via Grok X search on 2026-11-20. The sample lives in
+ * packages/shared/test/fixtures/real-x-video-posts.json and
+ * predictor.test.ts fails if these drift from it.
+ */
+export const INTERACTIONS_PER_VIEW: FunnelRange = { low: 0.076, likely: 0.027, high: 0.017 };
+
+/** Reach presets Chirp offers for a demo video post (see simulatedEngagement). */
+export const DEMO_REACH_PRESETS = [50_000, 250_000, 1_200_000, 5_000_000] as const;
+
+/**
+ * Plausible likes / replies / reposts / quotes for a post with this many views,
+ * at the MEDIAN interaction rate measured on real X video posts (2.7% of views
+ * interact; split roughly as the sample split). Used only for simulated reach.
+ */
+export function simulatedEngagement(views: number): {
+  likes: number;
+  replies: number;
+  reposts: number;
+  quotes: number;
+  views: number;
+} {
+  const interactions = views * INTERACTIONS_PER_VIEW.likely;
+  return {
+    likes: Math.round(interactions * 0.82),
+    replies: Math.round(interactions * 0.03),
+    reposts: Math.round(interactions * 0.13),
+    quotes: Math.round(interactions * 0.02),
+    views: Math.round(views),
+  };
+}
+
+/** X's worldwide ad-reachable audience. Source: DataReportal, October 2026. */
+export const X_AD_REACH_MILLIONS = 433;
+
+/**
+ * Step 3: how well an English post reaches a language's market, relative to
+ * that market's share of X. 1.0 would mean the post reached every market in
+ * proportion to its size; English posts mostly circulate among English
+ * speakers, so it is well below that. ASSUMPTION.
+ */
+export const MARKET_REACH: FunnelRange = { low: 0.25, likely: 0.5, high: 0.75 };
+
+/**
+ * Step 4: of the viewers in that language market, how many open the dub.
+ * ASSUMPTION. Upper sanity bound: YouTube reports creators with dubbed audio
+ * tracks get over 25% of watch time from those tracks - but there switching is
+ * one tap inside the player, while here it is a reply link, so we sit well
+ * below. https://blog.youtube/news-and-events/multi-language-audio-mrbeast-interview/
+ */
+export const DUB_UPTAKE: FunnelRange = { low: 0.02, likely: 0.05, high: 0.15 };
+
 /** Smoothing factor for the learning loop. */
 export const LEARNING_ALPHA: Ppm = ppm(300_000); // 0.3
 /** Observations needed before a bucket is trusted over the cold-start prior. */
@@ -104,28 +174,64 @@ export const REAL_LEARNING_DELAY_MS = 24 * 60 * 60 * 1000;
  * validate at request time rather than trusting blindly.
  * Source: https://elevenlabs.io/docs/capabilities/dubbing
  *
- * `marketSize` is a rough relative weight for the cold-start view predictor
- * (speakers online, normalised so Spanish = 1.0). It is a prior, not a fact,
- * and the learning loop overwrites its influence as real data arrives.
+ * `xAudienceMillions` is how many of X's ad-reachable accounts sit in markets
+ * that prefer the language - step 2 of the cold-start funnel in predictor.ts.
+ * Source: DataReportal, X ad reach, October 2026 (433M worldwide; top ten:
+ * US 77.3M, Japan 54.8M, India 22.9M, Indonesia 20.1M, Brazil 18.6M,
+ * Turkey 16.6M, Mexico 15.5M, UK 15.2M, Saudi Arabia 13.5M, Thailand 11.8M).
+ * https://datareportal.com/essential-x-stats
+ * `audienceBasis` says how much of the figure is that data and how much is our
+ * estimate for countries outside the published top ten (each under 11.8M).
  */
 export interface LanguageSpec {
   readonly code: string;
   readonly englishName: string;
   readonly nativeName: string;
-  readonly marketSize: number;
+  readonly xAudienceMillions: number;
+  readonly audienceBasis: string;
 }
 
 export const SUPPORTED_LANGUAGES: readonly LanguageSpec[] = [
-  { code: 'es', englishName: 'Spanish', nativeName: 'Espanol', marketSize: 1.0 },
-  { code: 'pt', englishName: 'Portuguese', nativeName: 'Portugues', marketSize: 0.55 },
-  { code: 'hi', englishName: 'Hindi', nativeName: 'Hindi', marketSize: 0.8 },
-  { code: 'fr', englishName: 'French', nativeName: 'Francais', marketSize: 0.5 },
-  { code: 'de', englishName: 'German', nativeName: 'Deutsch', marketSize: 0.35 },
-  { code: 'ja', englishName: 'Japanese', nativeName: 'Nihongo', marketSize: 0.4 },
-  { code: 'ko', englishName: 'Korean', nativeName: 'Hangugeo', marketSize: 0.25 },
-  { code: 'ar', englishName: 'Arabic', nativeName: 'Arabiyya', marketSize: 0.6 },
-  { code: 'id', englishName: 'Indonesian', nativeName: 'Bahasa Indonesia', marketSize: 0.45 },
-  { code: 'en', englishName: 'English', nativeName: 'English', marketSize: 1.2 },
+  {
+    code: 'es', englishName: 'Spanish', nativeName: 'Espanol', xAudienceMillions: 35,
+    audienceBasis: 'Mexico 15.5M (DataReportal) + ~20M estimated for Spain, Argentina, Colombia and the rest of Latin America',
+  },
+  {
+    code: 'pt', englishName: 'Portuguese', nativeName: 'Portugues', xAudienceMillions: 19.5,
+    audienceBasis: 'Brazil 18.6M (DataReportal) + ~1M estimated for Portugal',
+  },
+  {
+    code: 'hi', englishName: 'Hindi', nativeName: 'Hindi', xAudienceMillions: 9,
+    audienceBasis: 'India 22.9M (DataReportal), of whom we assume ~40% would rather watch in Hindi than English',
+  },
+  {
+    code: 'fr', englishName: 'French', nativeName: 'Francais', xAudienceMillions: 12,
+    audienceBasis: 'Estimate: France, Belgium, Quebec and francophone Africa (none in the published top ten)',
+  },
+  {
+    code: 'de', englishName: 'German', nativeName: 'Deutsch', xAudienceMillions: 8,
+    audienceBasis: 'Estimate: Germany, Austria and Switzerland (none in the published top ten)',
+  },
+  {
+    code: 'ja', englishName: 'Japanese', nativeName: 'Nihongo', xAudienceMillions: 54.8,
+    audienceBasis: 'Japan 54.8M (DataReportal)',
+  },
+  {
+    code: 'ko', englishName: 'Korean', nativeName: 'Hangugeo', xAudienceMillions: 10,
+    audienceBasis: 'South Korea ~10.1M (2025 figure; not in the 2026 top ten)',
+  },
+  {
+    code: 'ar', englishName: 'Arabic', nativeName: 'Arabiyya', xAudienceMillions: 23.5,
+    audienceBasis: 'Saudi Arabia 13.5M (DataReportal) + ~10M estimated for Egypt, the Gulf and North Africa',
+  },
+  {
+    code: 'id', englishName: 'Indonesian', nativeName: 'Bahasa Indonesia', xAudienceMillions: 20.1,
+    audienceBasis: 'Indonesia 20.1M (DataReportal)',
+  },
+  {
+    code: 'en', englishName: 'English', nativeName: 'English', xAudienceMillions: 110,
+    audienceBasis: 'US 77.3M + UK 15.2M (DataReportal) + ~17M estimated for Canada, Australia and others',
+  },
 ] as const;
 
 export const SUPPORTED_LANGUAGE_CODES = SUPPORTED_LANGUAGES.map((l) => l.code);

@@ -160,7 +160,7 @@ export class SeedService {
   /** The three creators whose stories the demo tells. */
   seedDemoCreators(): SeededCreator[] {
     return [
-      // 1. The worked example: strong engagement, gets dubbed, earns.
+      // 1. The worked example: a viral clip (1.2M views), gets dubbed, earns.
       this.seedCreator({
         handle: 'maria',
         displayName: 'Maria Okonkwo',
@@ -168,11 +168,11 @@ export class SeedService {
         followers: 50_000,
         postText: 'The one kitchen trick nobody taught me until I was 30. 30 seconds, changed everything.',
         durationS: 30,
-        likes: 800,
-        replies: 120,
-        reposts: 200,
-        quotes: 40,
-        views: 10_000,
+        likes: 18_000,
+        replies: 640,
+        reposts: 2_900,
+        quotes: 210,
+        views: 1_200_000,
         ageHours: 2,
       }),
       // 2. Not enough signal: the agents decline, and say why.
@@ -198,11 +198,11 @@ export class SeedService {
         followers: 18_000,
         postText: 'Three minutes, one pan, zero excuses.',
         durationS: 28,
-        likes: 410,
-        replies: 60,
-        reposts: 95,
-        quotes: 12,
-        views: 6_200,
+        likes: 14_000,
+        replies: 520,
+        reposts: 2_100,
+        quotes: 160,
+        views: 900_000,
         ageHours: 5,
       }),
     ];

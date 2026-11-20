@@ -179,12 +179,19 @@ export function unlockReceipt(unlock: Unlock, job: Job): ReceiptDto {
     amount: money(unlock.amount),
     at: unlock.createdAt.toISOString(),
     status: 'confirmed',
-    // Gateway batches unlocks off-chain, so an individual unlock has no
-    // transaction of its own to verify. Saying so by omission is the honest
-    // option; the settlement receipts are where verification lives.
-    verifyUrl: null,
+    // An unlock paid on-chain carries its transaction hash as the payment
+    // reference, so it links to the explorer. A ledger-only (simulated) unlock
+    // has no transaction of its own, and gets no link rather than a made-up one.
+    verifyUrl: unlockTxUrl(unlock),
     simulated: unlock.simulated,
   };
+}
+
+/** The explorer link for an unlock paid on-chain, or null when there is none. */
+export function unlockTxUrl(unlock: Unlock): string | null {
+  return !unlock.simulated && unlock.paymentRef !== null && /^0x[0-9a-fA-F]{64}$/.test(unlock.paymentRef)
+    ? txUrl(unlock.paymentRef)
+    : null;
 }
 
 export function dubPage(
@@ -274,7 +281,7 @@ function evMath(job: Job): EvMathDto | null {
   if (!decision) return null;
   return {
     predictedViews: decision.inputs.predictedViews,
-    conversionPercent: formatPpmPercent(ppm(decision.inputs.conversionPpm)),
+    conversionPercent: formatPpmPercent(ppm(decision.inputs.conversionPpm)).replace('%', ''),
     pSuccessPercent: formatPpmPercent(ppm(decision.inputs.pSuccessPpm)),
     rPerView: money(micros(BigInt(decision.result.rPerViewMicros)), 3),
     agentTakePerUnlock: money(
@@ -289,7 +296,7 @@ function evMath(job: Job): EvMathDto | null {
     dubCost: money(micros(BigInt(decision.inputs.dubCostMicros))),
     ev: money(micros(BigInt(decision.result.evMicros)), 3),
     minMargin: money(micros(BigInt(decision.inputs.minMarginMicros))),
-    confidencePercent: formatPpmPercent(ppm(decision.result.confidencePpm)),
+    confidencePercent: formatPpmPercent(ppm(decision.result.confidencePpm)).replace('%', ''),
     basis: decision.result.basis,
   };
 }
@@ -338,7 +345,7 @@ export function decisionLog(store: Store, limit = 40): DecisionLogEntryDto[] {
           : decision.rationale,
       math: {
         predictedViews: Number(decision.inputs.predictedViews ?? 0),
-        conversionPercent: formatPpmPercent(ppm(Number(decision.inputs.conversionPpm ?? 0))),
+        conversionPercent: formatPpmPercent(ppm(Number(decision.inputs.conversionPpm ?? 0))).replace('%', ''),
         pSuccessPercent: formatPpmPercent(ppm(Number(decision.inputs.pSuccessPpm ?? 0))),
         rPerView: money(micros(BigInt(String(decision.result.rPerViewMicros ?? '0'))), 3),
         agentTakePerUnlock: money(
@@ -358,7 +365,7 @@ export function decisionLog(store: Store, limit = 40): DecisionLogEntryDto[] {
         dubCost: money(micros(BigInt(String(decision.inputs.dubCostMicros ?? '0')))),
         ev: money(micros(BigInt(String(decision.result.evMicros ?? '0'))), 3),
         minMargin: money(micros(BigInt(String(decision.inputs.minMarginMicros ?? '0')))),
-        confidencePercent: formatPpmPercent(ppm(Number(decision.result.confidencePpm ?? 0))),
+        confidencePercent: formatPpmPercent(ppm(Number(decision.result.confidencePpm ?? 0))).replace('%', ''),
         basis: (decision.result.basis as 'bucket' | 'cold_start') ?? 'cold_start',
       },
       decidedAt: new Date(decision.decidedAt).toISOString(),
@@ -487,7 +494,7 @@ export function tickerFromUnlock(unlock: Unlock, store: Store): TickerEntryDto {
     text: `Someone unlocked a ${job ? languageName(job.targetLang) : ''} dub`.trim(),
     amount: money(unlock.amount),
     at: unlock.createdAt.toISOString(),
-    verifyUrl: null,
+    verifyUrl: unlockTxUrl(unlock),
     simulated: unlock.simulated,
   };
 }

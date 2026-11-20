@@ -230,7 +230,10 @@ export function createApp(deps: RouteDeps): Express {
     }
 
     try {
-      const result = payments.recordUnlock({
+      // The viewer pays on-chain: a real USDC transfer to the revenue wallet,
+      // confirmed before the unlock is recorded. See recordPaidUnlock.
+      const revenueAccount = [...store.accounts.values()].find((a) => a.kind === 'revenue');
+      const result = await payments.recordPaidUnlock({
         jobId: job.id,
         viewerAccountId: viewerId,
         amount: UNLOCK_PRICE,
@@ -238,8 +241,8 @@ export function createApp(deps: RouteDeps): Express {
         creatorAccountId: creator.accountId,
         splitAgentBps: job.splitAgentBps,
         splitCreatorBps: job.splitCreatorBps,
-        paymentRef: `x402:${randomUUID()}`,
-        simulated: !getConfig().capabilities.x402Payments,
+        viewerPoolPrivateKey: getConfig().env.VIEWER_POOL_PRIVATE_KEY as `0x${string}` | undefined,
+        revenueAccountId: revenueAccount?.id,
       });
 
       await pipeline.notePaidUnlock(job.id);
