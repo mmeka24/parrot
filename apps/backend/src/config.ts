@@ -55,6 +55,16 @@ const envSchema = z.object({
    * apply. For demos and testing; off by default.
    */
   FORCE_DUB: boolish,
+  /**
+   * In production the /api/demo/* write routes are closed unless this is set,
+   * and then require it in an `x-admin-token` header. Unset in development.
+   */
+  DEMO_ADMIN_TOKEN: optionalString,
+  /**
+   * Optional global clamp on every agent's daily spend, in USD ("3.00"). Bounds
+   * the worst-case ElevenLabs bill of a public deployment. Never raises a cap.
+   */
+  AGENT_DAILY_CAP_USD: optionalString,
 
   ARC_RPC_URL: z.string().url().default(ARC_TESTNET.rpcUrl),
   QUICKNODE_ARC_RPC_URL: optionalString,

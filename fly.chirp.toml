@@ -1,0 +1,31 @@
+# Chirp: the local X stand-in, hosted so the demo timeline is public too.
+app = "parrot-chirp"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile.next"
+  [build.args]
+    APP = "x-clone"
+    NEXT_PUBLIC_BACKEND_URL = "https://parrot-backend.fly.dev"
+    NEXT_PUBLIC_SITE_URL = "https://parrot-chirp.fly.dev"
+
+[env]
+  NODE_ENV = "production"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[http_service.checks]]
+  grace_period = "30s"
+  interval = "30s"
+  method = "GET"
+  path = "/icon.svg"
+  timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
