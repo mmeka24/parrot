@@ -10,7 +10,7 @@
  */
 
 import { build, context } from 'esbuild';
-import { cp, mkdir, rm } from 'node:fs/promises';
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -23,6 +23,35 @@ await mkdir(dist, { recursive: true });
 
 for (const file of ['manifest.json', 'popup.html', 'icons']) {
   await cp(join(root, 'static', file), join(dist, file), { recursive: true });
+}
+
+// A shared build talks to a hosted server, and Chrome only lets the extension
+// reach origins the manifest names. So add what this build was made for:
+//   PARROT_SERVER=https://parrot-backend.fly.dev   -> host permission
+//   PARROT_EXTRA_SITES=https://parrot-chirp.vercel.app,...  -> also draw on these
+{
+  const manifestPath = join(dist, 'manifest.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  const origin = (value) => {
+    try {
+      const url = new URL(value.trim());
+      return url.protocol === 'https:' || url.hostname === 'localhost' ? `${url.origin}/*` : null;
+    } catch {
+      return null;
+    }
+  };
+  const server = process.env.PARROT_SERVER ? origin(process.env.PARROT_SERVER) : null;
+  const sites = (process.env.PARROT_EXTRA_SITES ?? '')
+    .split(',')
+    .map(origin)
+    .filter((entry) => entry !== null);
+  const add = (list, entries) => {
+    for (const entry of entries) if (!list.includes(entry)) list.push(entry);
+  };
+  if (server) add(manifest.host_permissions, [server]);
+  add(manifest.host_permissions, sites);
+  add(manifest.content_scripts[0].matches, sites);
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 const options = {

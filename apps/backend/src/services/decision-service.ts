@@ -22,6 +22,7 @@ import {
   predictViews,
   engagementScore,
   formatUsd,
+  parseUsd,
   formatPpmPercent,
   languageName,
   clampPpm,
@@ -186,20 +187,27 @@ export class DecisionService {
       };
     }
 
+    // A deployment-wide clamp, so a public instance has a bounded worst case.
+    // It can only lower an agent's own cap.
+    const clampUsd = getConfig().env.AGENT_DAILY_CAP_USD;
+    const clamp = clampUsd ? parseUsd(clampUsd) : null;
+    const effectiveDailyCap =
+      clamp !== null && (clamp as bigint) < (agent.dailyCap as bigint) ? clamp : agent.dailyCap;
+
     const budget = checkBudget({
       balance,
       dubCost,
       floor: agent.floor,
       maxExposurePerJob: agent.maxExposurePerJob,
       spentToday,
-      dailyCap: agent.dailyCap,
+      dailyCap: effectiveDailyCap,
     });
 
     if (!budget.ok) {
       const explanation: Record<typeof budget.reason, string> = {
         BUDGET_FLOOR: `Dubbing this would cost ${formatUsd(dubCost)} and leave me under my ${formatUsd(agent.floor)} reserve, so I am sitting this one out.`,
         MAX_EXPOSURE: `At ${formatUsd(dubCost)} this is more than the ${formatUsd(agent.maxExposurePerJob)} I will risk on any single video.`,
-        DAILY_CAP: `I have already spent ${formatUsd(spentToday)} today and I cap myself at ${formatUsd(agent.dailyCap)}.`,
+        DAILY_CAP: `I have already spent ${formatUsd(spentToday)} today and I cap myself at ${formatUsd(effectiveDailyCap)}.`,
       };
       return {
         agent,

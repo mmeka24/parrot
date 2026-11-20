@@ -303,6 +303,49 @@ describe('FORCE_DUB override', () => {
   });
 });
 
+describe('AGENT_DAILY_CAP_USD clamp', () => {
+  function withCap<T>(cap: string | undefined, fn: () => T): T {
+    const before = process.env.AGENT_DAILY_CAP_USD;
+    if (cap === undefined) delete process.env.AGENT_DAILY_CAP_USD;
+    else process.env.AGENT_DAILY_CAP_USD = cap;
+    resetConfig();
+    try {
+      return fn();
+    } finally {
+      if (before === undefined) delete process.env.AGENT_DAILY_CAP_USD;
+      else process.env.AGENT_DAILY_CAP_USD = before;
+      resetConfig();
+    }
+  }
+
+  it('declines on DAILY_CAP once the clamp is lower than the cost', () => {
+    withCap('0.01', () => {
+      const { store, service } = makeStore();
+      const agent = addAgent(store, { name: 'Magpie' });
+      const bid = service.evaluate(agent, workedExampleJob(store));
+      expect(bid.approved).toBe(false);
+      expect(bid.decision.declineReason).toBe('DAILY_CAP');
+    });
+  });
+
+  it('never raises an agent cap above its own', () => {
+    withCap('1000.00', () => {
+      const { store, service } = makeStore();
+      const agent = addAgent(store, { name: 'Magpie', dailyCap: parseUsd('0.01') });
+      const bid = service.evaluate(agent, workedExampleJob(store));
+      expect(bid.decision.declineReason).toBe('DAILY_CAP');
+    });
+  });
+
+  it('changes nothing when unset', () => {
+    withCap(undefined, () => {
+      const { store, service } = makeStore();
+      const agent = addAgent(store, { name: 'Magpie' });
+      expect(service.evaluate(agent, workedExampleJob(store)).approved).toBe(true);
+    });
+  });
+});
+
 describe('the specialist persona', () => {
   it('refuses work outside its language', () => {
     const { store, service } = makeStore();

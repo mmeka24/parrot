@@ -14,6 +14,7 @@ const NAV = [
   { href: '/leaderboard', label: localCopy.nav.leaderboard },
   { href: '/console', label: localCopy.nav.console },
   { href: '/under-the-hood', label: localCopy.nav.underTheHood },
+  { href: '/extension', label: localCopy.nav.extension },
 ];
 
 export function SiteHeader({ status }: { status: SystemStatusDto }) {
