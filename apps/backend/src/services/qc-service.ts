@@ -193,8 +193,8 @@ export class QcService {
       );
     }
 
-    const heard = stt.language_code.toLowerCase().split(/[-_]/)[0] ?? '';
-    const want = input.targetLang.toLowerCase().split(/[-_]/)[0] ?? '';
+    const heard = toIso639_1(stt.language_code);
+    const want = toIso639_1(input.targetLang);
     const confidence = stt.language_probability;
 
     if (heard !== want) {
@@ -452,6 +452,30 @@ export function parseLoudness(stderr: string): number | null {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Scribe reports ISO 639-3 codes ("spa"); the rest of the system uses ISO 639-1
+ * ("es"). Without normalising, a correct dub fails the language gate.
+ */
+const ISO_639_3_TO_1: Record<string, string> = {
+  spa: 'es',
+  por: 'pt',
+  hin: 'hi',
+  fra: 'fr',
+  fre: 'fr',
+  deu: 'de',
+  ger: 'de',
+  jpn: 'ja',
+  kor: 'ko',
+  ara: 'ar',
+  ind: 'id',
+  eng: 'en',
+};
+
+function toIso639_1(code: string): string {
+  const base = code.toLowerCase().split(/[-_]/)[0] ?? '';
+  return ISO_639_3_TO_1[base] ?? base;
+}
 
 function skipped(
   name: QcCheckName,

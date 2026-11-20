@@ -23,7 +23,7 @@
 
 import { createHash } from 'node:crypto';
 import { readFile, writeFile, mkdir, copyFile, stat } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   ELEVENLABS_MAX_CONCURRENT_DUBS,
@@ -31,6 +31,18 @@ import {
   elevenLabsDubStatusSchema,
 } from '@parrot/shared';
 import { getConfig } from '../config.js';
+
+const MIME_BY_EXT: Record<string, string> = {
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+};
+
+function mimeForPath(path: string): string {
+  return MIME_BY_EXT[extname(path).toLowerCase()] ?? 'application/octet-stream';
+}
 
 const ELEVENLABS_BASE_URL = 'https://api.elevenlabs.io';
 
@@ -337,7 +349,9 @@ export class DubbingService {
       const bytes = await readFile(input.filePath);
       form.set(
         'file',
-        new Blob([new Uint8Array(bytes)], { type: 'application/octet-stream' }),
+        // The provider rejects application/octet-stream (400 invalid_file_type),
+        // so declare the real type from the extension.
+        new Blob([new Uint8Array(bytes)], { type: mimeForPath(input.filePath) }),
         basename(input.filePath),
       );
     }

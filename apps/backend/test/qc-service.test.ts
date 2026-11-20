@@ -203,6 +203,15 @@ describe('QcService - language_detect', () => {
     expect((await svc.checkLanguage(input)).status).toBe('passed');
   });
 
+  it('accepts the ISO 639-3 code Scribe actually returns ("spa" for "es")', async () => {
+    sttEnv(true);
+    const fetchImpl = sttFetch({ language_code: 'spa', language_probability: 0.93, text: 'hola' });
+    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing });
+    const check = await svc.checkLanguage(input);
+    expect(check.status).toBe('passed');
+    expect(check.measured?.detected).toBe('es');
+  });
+
   it('reads the multi-channel transcripts shape', async () => {
     sttEnv(true);
     const fetchImpl = sttFetch({
