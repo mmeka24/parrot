@@ -25,6 +25,7 @@ import { LearningService } from './services/learning-service.js';
 import { SeedService } from './services/seed-service.js';
 import { DubbingService } from './services/dubbing-service.js';
 import { QcService } from './services/qc-service.js';
+import { MediaFetcher, X_STATUS_URL } from './services/media-fetcher.js';
 import { JobPipeline, type DubbingPort, type QcPort } from './services/job-pipeline.js';
 import { SettlementScheduler } from './payments/settlement-scheduler.js';
 import { MockXAdapter, MOCK_SEED_POSTS } from './bot/mock-x-adapter.js';
@@ -48,11 +49,15 @@ import { parseStatusHref } from '@parrot/shared';
  *    would send those links to the provider, fail every seeded job on boot, and
  *    spend speech-recognition credits transcribing a stand-in tone.
  *  - `remote`: a real post on the real service; the provider fetches the link.
+ *  - `x`: a post read off x.com by the extension. There is no stored file, so
+ *    the video is downloaded first (MediaFetcher); if the downloader is not
+ *    installed it falls back to `remote`.
  */
 type SourceMedia =
   | { kind: 'file'; path: string }
   | { kind: 'none' }
-  | { kind: 'remote' };
+  | { kind: 'remote' }
+  | { kind: 'x' };
 
 /**
  * Adapts DubbingService to the pipeline's port.
@@ -64,10 +69,17 @@ type SourceMedia =
 function dubbingPort(
   service: DubbingService,
   resolveSource: (sourceUrl: string) => SourceMedia,
+  fetcher: MediaFetcher,
 ): DubbingPort {
   return {
     async createDub({ sourceUrl, targetLang, durationS }) {
-      const source = resolveSource(sourceUrl);
+      let source = resolveSource(sourceUrl);
+      if (source.kind === 'x') {
+        // Fetch the real video. Null means the downloader is not installed:
+        // let the provider try the link itself rather than fail outright.
+        const path = await fetcher.fetch(sourceUrl);
+        source = path ? { kind: 'file', path } : { kind: 'remote' };
+      }
       const result =
         source.kind === 'file'
           ? // A really-uploaded clip: send the bytes. The provider cannot fetch
@@ -184,6 +196,9 @@ async function main(): Promise<void> {
   const adapter: XAdapter = realX ?? mockX;
 
   const resolveSource = (sourceUrl: string): SourceMedia => {
+    // A post the extension read off x.com: fetch its real video.
+    const xPost = X_STATUS_URL.exec(sourceUrl)?.[2];
+    if (xPost !== undefined && store.observedPosts.has(xPost)) return { kind: 'x' };
     if (!adapter.isMock) return { kind: 'remote' };
     const postId = parseStatusHref(sourceUrl)?.postId;
     // A real x.com post seen through the extension: the provider fetches it.
@@ -196,7 +211,7 @@ async function main(): Promise<void> {
     store,
     decisions,
     payments,
-    dubbingPort(dubbing, resolveSource),
+    dubbingPort(dubbing, resolveSource, new MediaFetcher()),
     qcPort(qc),
     {
       onTransition: (job, event) => {

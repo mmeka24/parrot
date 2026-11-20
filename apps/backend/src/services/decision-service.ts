@@ -37,6 +37,7 @@ import {
   type Ppm,
   type DeclineReason,
 } from '@parrot/shared';
+import { getConfig } from '../config.js';
 import type { Store } from '../store/store.js';
 import type { Agent, Job } from '../store/types.js';
 
@@ -188,7 +189,10 @@ export class DecisionService {
       };
     }
 
-    const clears = (ev.ev as bigint) > (agent.minMargin as bigint);
+    // FORCE_DUB skips ONLY this margin test. The budget checks above have
+    // already run and still bind.
+    const forced = getConfig().env.FORCE_DUB;
+    const clears = forced || (ev.ev as bigint) > (agent.minMargin as bigint);
     const lang = languageName(job.targetLang);
 
     const mathSentence =
@@ -215,7 +219,9 @@ export class DecisionService {
       decision: mkDecision(
         true,
         null,
-        `${mathSentence} Expected profit ${formatUsd(ev.ev, { sign: true })}. Dubbing it into ${lang}.`,
+        forced && (ev.ev as bigint) <= (agent.minMargin as bigint)
+          ? `${mathSentence} That is an expected ${formatUsd(ev.ev, { sign: true })}, below my ${formatUsd(agent.minMargin)} margin, but the override is on. Dubbing it into ${lang} anyway.`
+          : `${mathSentence} Expected profit ${formatUsd(ev.ev, { sign: true })}. Dubbing it into ${lang}.`,
       ),
     };
   }

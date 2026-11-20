@@ -44,6 +44,12 @@ const envSchema = z.object({
   /** Where the local X stand-in (apps/x-clone) is served. Used for permalinks. */
   PUBLIC_XCLONE_URL: z.string().url().default('http://localhost:3200'),
   DEMO_MODE: boolish,
+  /**
+   * Skip the agents' profit-margin test so any job within their spend caps gets
+   * dubbed. Budget floors, per-job and daily caps, and language focus still
+   * apply. For demos and testing; off by default.
+   */
+  FORCE_DUB: boolish,
 
   ARC_RPC_URL: z.string().url().default(ARC_TESTNET.rpcUrl),
   QUICKNODE_ARC_RPC_URL: optionalString,
@@ -65,6 +71,8 @@ const envSchema = z.object({
 
   ELEVENLABS_API_KEY: optionalString,
   ELEVENLABS_STT_MODEL: z.string().default('scribe_v3'),
+  /** Path to yt-dlp, used to fetch the video behind an x.com post. Optional. */
+  YT_DLP_PATH: optionalString,
 
   X_ENABLED: boolish,
   X_BEARER_TOKEN: optionalString,

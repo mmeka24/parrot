@@ -235,6 +235,69 @@ describe('a single agent evaluating the worked example', () => {
   });
 });
 
+describe('FORCE_DUB override', () => {
+  const lowInterest = {
+    likes: 1,
+    replies: 0,
+    reposts: 0,
+    quotes: 0,
+    sourceViews: 10,
+    authorFollowers: 50,
+    ageHours: 72,
+  };
+
+  function withForce<T>(on: boolean, fn: () => T): T {
+    const before = process.env.FORCE_DUB;
+    process.env.FORCE_DUB = on ? 'true' : 'false';
+    resetConfig();
+    try {
+      return fn();
+    } finally {
+      if (before === undefined) delete process.env.FORCE_DUB;
+      else process.env.FORCE_DUB = before;
+      resetConfig();
+    }
+  }
+
+  it('approves a low-interest job and says the override is on', () => {
+    withForce(true, () => {
+      const { store, service } = makeStore();
+      const agent = addAgent(store, { name: 'Magpie' });
+      const bid = service.evaluate(agent, workedExampleJob(store, { signals: lowInterest }));
+      expect(bid.approved).toBe(true);
+      expect(bid.decision.rationale).toMatch(/override is on/);
+    });
+  });
+
+  it('is off by default: the same job is declined as low EV', () => {
+    withForce(false, () => {
+      const { store, service } = makeStore();
+      const agent = addAgent(store, { name: 'Magpie' });
+      const bid = service.evaluate(agent, workedExampleJob(store, { signals: lowInterest }));
+      expect(bid.decision.declineReason).toBe('LOW_EV');
+    });
+  });
+
+  it('does not bypass language focus', () => {
+    withForce(true, () => {
+      const { store, service } = makeStore();
+      const finch = addAgent(store, { name: 'Finch', languageFocus: 'es' });
+      const job = workedExampleJob(store, { targetLang: 'hi', sourcePostId: 'hi-1', signals: lowInterest });
+      expect(service.evaluate(finch, job).decision.declineReason).toBe('UNSUPPORTED_LANGUAGE');
+    });
+  });
+
+  it('does not bypass the per-job spend cap', () => {
+    withForce(true, () => {
+      const { store, service } = makeStore();
+      const agent = addAgent(store, { name: 'Kestrel', maxExposurePerJob: parseUsd('0.01') });
+      const bid = service.evaluate(agent, workedExampleJob(store, { signals: lowInterest }));
+      expect(bid.approved).toBe(false);
+      expect(bid.decision.declineReason).toBe('MAX_EXPOSURE');
+    });
+  });
+});
+
 describe('the specialist persona', () => {
   it('refuses work outside its language', () => {
     const { store, service } = makeStore();
