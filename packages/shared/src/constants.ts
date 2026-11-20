@@ -38,7 +38,7 @@ export const DEMO_CREATOR_BALANCE: Micros = parseUsd('25.00');
 // ---------------------------------------------------------------------------
 
 /** How many languages a post is dubbed into while Parrot is still learning. */
-export const EXPLORE_LANGUAGE_COUNT = 6;
+export const EXPLORE_LANGUAGE_COUNT = 8;
 /** How many posts Parrot spends learning before it narrows down. */
 export const EXPLORE_POSTS = 2;
 /** The most proven languages a post is dubbed into once Parrot has learned. */

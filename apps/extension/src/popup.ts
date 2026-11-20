@@ -58,7 +58,7 @@ async function render(): Promise<void> {
   byId('test-section').hidden = false;
 
   const dashboard = byId<HTMLAnchorElement>('dashboard');
-  dashboard.href = `${config.data.webUrl}/agents`;
+  dashboard.href = `${config.data.webUrl}/`;
   dashboard.textContent = t.popupDashboard;
   byId('links').hidden = false;
 }

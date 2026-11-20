@@ -236,13 +236,16 @@ export function planLanguages(history: readonly PostHistory[], options: PlanOpti
       ...fresh.map<PlanEntry>((s) => ({ lang: s.lang, role: 'explore', reason: s.reason })),
     ];
     const kept = keep.length + more.length;
+    const freshWord = fresh.length === 1 ? 'one' : 'ones';
     return {
       mode: 'explore',
       entries,
       summary:
-        fresh.length > 0
-          ? `Still learning: keeping the ${kept} that did best and trying ${fresh.length} new ${fresh.length === 1 ? 'one' : 'ones'}.`
-          : `Still learning: a second look at the ${kept} that did best.`,
+        kept === 0
+          ? `Nothing has paid off yet, so trying ${fresh.length} new ${fresh.length === 1 ? 'language' : 'languages'}.`
+          : fresh.length > 0
+            ? `Still learning: keeping the ${kept} that did best and trying ${fresh.length} new ${freshWord}.`
+            : `Still learning: a second look at the ${kept} that did best.`,
       standings,
     };
   }

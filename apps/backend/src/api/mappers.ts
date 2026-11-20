@@ -29,6 +29,7 @@ import {
   type CreatorDashboardDto,
   type DubDto,
   type DubPageDto,
+  type ExtensionResultsDto,
   type LanguagePlan,
   type LanguageRefDto,
   type LanguageRowDto,
@@ -506,5 +507,76 @@ export function systemStatus(store: Store, accounts: boolean, revenueAddress: st
     creators: [...store.creators.values()]
       .sort((a, b) => a.handle.localeCompare(b.handle))
       .map((c) => ({ handle: c.handle, displayName: c.displayName })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/extension/results
+// ---------------------------------------------------------------------------
+
+export function extensionResults(input: {
+  readonly store: Store;
+  readonly creator: Creator;
+  readonly post: DubbedPost;
+  readonly plan: LanguagePlan;
+  readonly postsMeasured: number;
+  readonly canSendAudience: boolean;
+  readonly webUrl: string;
+}): ExtensionResultsDto {
+  const { store, creator, post, plan } = input;
+  const dto = postDto(store, post, creator);
+  const dubs = store.dubsForPost(post.id);
+  const live = dubs.filter((d) => d.state === 'PUBLISHED');
+  const total = addPnl(live.map((d) => linePnl(d, creator)));
+  const webUrl = input.webUrl.replace(/\/$/, '');
+
+  return {
+    postId: post.sourcePostId,
+    handle: creator.handle,
+    modeLabel: dto.modeLabel,
+    summary: post.summary,
+    working: dto.working,
+    measured: dto.measured,
+    demoAudience: post.demoAudience,
+    canSendAudience:
+      input.canSendAudience && !dto.working && post.demoAudience !== 'arriving' && live.some((d) => d.simulatedViews === 0),
+    dubs: dto.dubs.map((d) => ({
+      code: d.code,
+      name: d.name,
+      flag: d.flag,
+      state: d.state,
+      statusLabel: d.statusLabel,
+      views: d.views,
+      breakEvenViews: d.breakEvenViews,
+      breakEvenPercent: d.breakEvenPercent,
+      paidForItself: d.paidForItself,
+      paid: d.paid,
+      watchUrl: d.watchPath ? `${webUrl}${d.watchPath}` : null,
+      problem: d.problem,
+      simulatedDub: d.simulatedDub,
+    })),
+    totals: {
+      views: dto.views,
+      value: money(total.value),
+      paid: money(total.paid),
+      net: money(total.net),
+      dubCost: money(micros(dubs.reduce((sum, d) => sum + (d.dubCost as bigint), 0n))),
+      budget: money(post.budget),
+    },
+    learned: {
+      basedOnPosts: input.postsMeasured,
+      nextSummary: plan.summary,
+      languages: plan.standings
+        .filter((s) => s.tries > 0)
+        .map((s) => ({
+          name: languageRef(s.lang).name,
+          flag: languageRef(s.lang).flag,
+          status: s.status,
+          statusLabel: STATUS_LABEL[s.status],
+          avgViews: Math.round(s.avgViews),
+        })),
+    },
+    dashboardUrl: `${webUrl}/creator/${creator.handle}`,
+    includesSimulated: live.some((d) => d.simulatedViews > 0),
   };
 }

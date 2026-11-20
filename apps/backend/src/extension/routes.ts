@@ -31,6 +31,7 @@ import {
   type ExtensionConfigDto,
   type ExtensionDubAcceptedDto,
   type ExtensionDubDto,
+  type ExtensionResultsDto,
   type ExtensionPostStatusDto,
   type ExtensionStatusResponseDto,
 } from '@parrot/shared';
@@ -51,6 +52,13 @@ export interface ExtensionDeps {
    * are not wanted (tests).
    */
   dubObservedPost?: (post: ObservedPost, targetLang: string | null) => Promise<string>;
+  /** The numbers under a dubbed post. Null when the post has not been dubbed. */
+  results?: (postId: string) => ExtensionResultsDto | null;
+  /**
+   * Send the simulated demo audience to a dubbed post. Absent on a server that
+   * is not a demo. Resolves false when there is nothing to send to.
+   */
+  sendAudience?: (postId: string) => Promise<boolean>;
 }
 
 const handleSchema = z
@@ -78,6 +86,11 @@ const observedSchema = z.object({
 
 /** Shape only; each post is validated on its own (see /observe). */
 const observeSchema = z.object({ posts: z.array(z.unknown()).max(50) });
+
+const audienceSchema = z.object({
+  postId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+  requesterHandle: handleSchema,
+});
 
 const requestSchema = z.object({
   postId: z.string().regex(/^[0-9]{1,25}$/),
@@ -128,6 +141,35 @@ export function registerExtensionRoutes(app: Express, deps: ExtensionDeps): void
     const posts = await Promise.all([...new Set(ids)].map((id) => statusFor(id)));
     const payload: ExtensionStatusResponseDto = { posts };
     res.json(payload);
+  });
+
+  app.get('/api/extension/results', (req, res) => {
+    const postId = String(req.query.postId ?? '');
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(postId) || !deps.results) {
+      return res.status(404).json(badRequest('Nothing to show', 'Parrot has no dubs for that post.'));
+    }
+    const results = deps.results(postId);
+    if (!results) return res.status(404).json(badRequest('Nothing to show', 'Parrot has no dubs for that post.'));
+    res.json(results);
+  });
+
+  // Demo only: simulated viewers, so the numbers have something to move on.
+  // Authorship is the same page-read check as a dub request.
+  app.post('/api/extension/audience', (req, res) => {
+    if (!deps.sendAudience || !deps.results) {
+      return res.status(404).json(badRequest('Not available here', 'This server does not run the demo audience.'));
+    }
+    const parsed = audienceSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json(badRequest('That could not be read', 'Try again.'));
+    const results = deps.results(parsed.data.postId);
+    if (!results || results.handle.toLowerCase() !== parsed.data.requesterHandle) {
+      return res.status(403).json(badRequest('Not your video', 'Only the person who posted the video can do that.'));
+    }
+    if (!results.canSendAudience) {
+      return res.status(409).json(badRequest('Not yet', 'Wait until the dubs are live, and send the audience once.'));
+    }
+    void deps.sendAudience(parsed.data.postId).catch((error: unknown) => console.error('[extension] audience failed', error));
+    res.status(202).json({ ok: true });
   });
 
   // ---- x.com only -----------------------------------------------------------

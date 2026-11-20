@@ -1,12 +1,13 @@
 /**
  * The background worker: the extension's only route to the Parrot server.
  *
- * It does two reads - the extension's settings, and what Parrot knows about a
- * batch of posts - and holds the server address. It has no write path to
- * Parrot at all: a dub is requested by the creator's own reply on the page.
+ * It reads the extension's settings, what Parrot knows about a batch of posts,
+ * and the results under a dubbed post. It writes only three things: what a page
+ * showed (observe), a dub request from the post's author (request), and, on a
+ * demo server, the simulated audience (audience).
  */
 
-import type { ExtensionConfigDto, ExtensionStatusResponseDto } from '@parrot/shared';
+import type { ExtensionConfigDto, ExtensionResultsDto, ExtensionStatusResponseDto } from '@parrot/shared';
 import { DEFAULT_SERVER, type Request, type Response } from './messages';
 
 const SERVER_KEY = 'server';
@@ -61,6 +62,11 @@ async function handle(request: Request): Promise<unknown> {
       return getJson('/api/extension/observe', { posts: request.posts.slice(0, MAX_IDS) });
     case 'request':
       return getJson('/api/extension/request', request.body);
+    case 'results':
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(request.postId)) throw new Error('not a post id');
+      return getJson<ExtensionResultsDto>(`/api/extension/results?postId=${encodeURIComponent(request.postId)}`);
+    case 'audience':
+      return getJson('/api/extension/audience', request.body);
     case 'getServer':
       return server();
     case 'setServer': {

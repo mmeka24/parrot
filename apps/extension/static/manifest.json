@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Parrot",
   "version": "0.1.0",
-  "description": "Dubs for the videos in your timeline. Watch posts in your language; creators get theirs dubbed for free.",
+  "description": "Dubs for the videos in your timeline. Parrot tries your video in several languages, learns which ones get watched, and you only pay for the views.",
   "icons": {
     "16": "icons/16.png",
     "32": "icons/32.png",

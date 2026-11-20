@@ -26,6 +26,7 @@ import type {
   ExtensionDubDto,
   ExtensionObservedPostDto,
   ExtensionPostStatusDto,
+  ExtensionResultsDto,
 } from '@parrot/shared';
 import { ask } from './messages';
 import { el, parrotMark, waitFor } from './dom';
@@ -59,10 +60,14 @@ interface LocalState {
   /** A request this tab just sent, until the server has seen it. */
   sentAt: number | null;
   message: { text: string; error: boolean } | null;
+  /** The demo audience was asked for from this tab. */
+  audienceAsked: boolean;
 }
 
 let config: ExtensionConfigDto | null = null;
 const statuses = new Map<string, ExtensionPostStatusDto>();
+/** The numbers under each dubbed post, by post id. */
+const results = new Map<string, ExtensionResultsDto>();
 const local = new Map<string, LocalState>();
 /** The last thing drawn per strip, so an unchanged strip is left alone. */
 const drawn = new WeakMap<ShadowRoot, string>();
@@ -201,7 +206,7 @@ function currentHandle(): string | null {
 function stateFor(postId: string): LocalState {
   let state = local.get(postId);
   if (!state) {
-    state = { menuOpen: false, busy: false, sentAt: null, message: null };
+    state = { menuOpen: false, busy: false, sentAt: null, message: null, audienceAsked: false };
     local.set(postId, state);
   }
   return state;
@@ -234,8 +239,10 @@ async function refresh(): Promise<void> {
     scheduleSoon();
     return;
   }
-  const busy = [...local.values()].some((s) => s.busy || s.sentAt !== null) ||
-    [...statuses.values()].some((s) => s.pending);
+  const busy =
+    [...local.values()].some((s) => s.busy || s.sentAt !== null) ||
+    [...statuses.values()].some((s) => s.pending) ||
+    [...results.values()].some((r) => r.working || r.demoAudience === 'arriving');
   timer = window.setTimeout(() => void refresh(), busy ? POLL_BUSY_MS : POLL_IDLE_MS);
 }
 
@@ -259,6 +266,15 @@ async function refreshOnce(): Promise<void> {
       const response = await ask({ type: 'posts', ids });
       if (response.ok) {
         for (const status of response.data.posts) statuses.set(status.postId, status);
+        // Posts that have dubs also get their numbers.
+        await Promise.all(
+          response.data.posts
+            .filter((status) => status.dubs.length > 0)
+            .map(async (status) => {
+              const found = await ask({ type: 'results', postId: status.postId });
+              if (found.ok) results.set(status.postId, found.data);
+            }),
+        );
       }
     }
     drawAll();
@@ -366,7 +382,10 @@ function draw(
 
   // Skip the redraw when nothing visible changed, so focus and hover survive
   // the poll.
+  const numbers = results.get(postId);
   const signature = JSON.stringify([
+    numbers ?? null,
+    state.audienceAsked,
     watchable.map((d) => d.jobId),
     pending,
     canDub,
@@ -385,9 +404,12 @@ function draw(
     el('span', { class: 'brand' }, [parrotMark(16), t.name]),
   ]);
 
-  if (watchable.length > 0) {
+  // With the numbers panel below, every dub is listed (and linked) there.
+  if (watchable.length > 0 && !numbers) {
     row.append(el('span', { class: 'label' }, [t.watchPrefix]));
     for (const dub of watchable) row.append(watchChip(dub));
+  } else if (watchable.length > 0) {
+    // nothing: the panel carries them
   } else if (!pending && !canDub) {
     row.append(el('span', { class: 'label' }, [t.notDubbedYet]));
   }
@@ -426,6 +448,8 @@ function draw(
 
   if (canDub && state.menuOpen && !state.busy) strip.append(languageMenu(article, postId, status, state));
 
+  if (numbers) strip.append(resultsPanel(postId, numbers, state, isAuthor, me));
+
   if (state.message) {
     strip.append(
       el('p', { class: `status${state.message.error ? ' error' : ''}`, role: 'status' }, [
@@ -439,6 +463,119 @@ function draw(
   // Keep the stylesheet, replace the rest.
   root.querySelector('.strip')?.remove();
   root.append(strip);
+}
+
+const WORKING = new Set(['QUEUED', 'DUBBING', 'QC']);
+
+function resultsPanel(
+  postId: string,
+  r: ExtensionResultsDto,
+  state: LocalState,
+  isAuthor: boolean,
+  me: string | null,
+): HTMLElement {
+  const panel = el('div', { class: 'results' });
+
+  const head = el('div', { class: 'res-head' }, [
+    el('span', { class: 'res-title' }, [t.resultsTitle]),
+    el('span', { class: 'tag' }, [r.modeLabel]),
+    r.working
+      ? el('span', { class: 'pending' }, [el('span', { class: 'dot' }), t.pending])
+      : r.demoAudience === 'arriving'
+        ? el('span', { class: 'pending' }, [el('span', { class: 'dot' }), t.audienceSending])
+        : null,
+  ]);
+  panel.append(head, el('p', { class: 'res-summary' }, [r.summary]));
+
+  const rows = el('div', { class: 'rows' });
+  for (const dub of r.dubs) {
+    const live = dub.state === 'PUBLISHED';
+    const name = `${dub.flag} ${dub.name}`.trim();
+    const label = dub.watchUrl
+      ? el('a', { class: 'dname', href: dub.watchUrl, target: '_blank', rel: 'noopener' }, [name])
+      : el('span', { class: 'dname' }, [name]);
+
+    const middle = el('div', { class: 'dmid' });
+    if (live) {
+      middle.append(
+        el('div', { class: 'dviews' }, [
+          fill(t.resultsViews, { views: dub.views.toLocaleString('en-US') }),
+          ' ',
+          el('small', {}, [
+            dub.paidForItself
+              ? t.resultsPaidFor
+              : fill(t.resultsToPay, {
+                  views: dub.views.toLocaleString('en-US'),
+                  needed: dub.breakEvenViews.toLocaleString('en-US'),
+                }),
+          ]),
+        ]),
+        el('div', { class: dub.paidForItself ? 'bar good' : 'bar' }, [
+          el('i', { style: `width:${Math.max(2, Math.min(100, dub.breakEvenPercent))}%` }),
+        ]),
+      );
+    } else if (WORKING.has(dub.state)) {
+      middle.append(el('span', { class: 'pending' }, [el('span', { class: 'dot' }), dub.statusLabel]));
+    } else {
+      middle.append(el('span', { class: 'tag bad' }, [dub.statusLabel]));
+    }
+
+    const row = el('div', { class: 'drow' }, [label, middle, el('span', { class: 'dpaid' }, [live ? dub.paid.display : ''])]);
+    if (dub.problem) row.append(el('div', { class: 'dwhy' }, [`${dub.problem} Parrot covers the cost.`]));
+    rows.append(row);
+  }
+  panel.append(rows);
+
+  const net = r.totals.net.display;
+  panel.append(
+    el('div', { class: 'totals' }, [
+      el('div', {}, [el('small', {}, ['Views']), el('b', {}, [r.totals.views.toLocaleString('en-US')])]),
+      el('div', {}, [el('small', {}, [t.resultsYouPay]), el('b', {}, [r.totals.paid.display])]),
+      el('div', {}, [el('small', {}, [t.resultsWorth]), el('b', {}, [r.totals.value.display])]),
+      el('div', {}, [el('small', {}, [t.resultsNet]), el('b', { class: net.startsWith('-') ? 'down' : 'up' }, [net])]),
+    ]),
+    el('p', { class: 'fine' }, [fill(t.resultsParrotPaid, { amount: r.totals.dubCost.display })]),
+  );
+
+  if (r.measured && r.learned.languages.length > 0) {
+    const chips = el('div', { class: 'chips' });
+    for (const lang of r.learned.languages) {
+      const cls = lang.status === 'winner' ? 'tag good' : lang.status === 'dropped' ? 'tag bad' : 'tag';
+      chips.append(el('span', { class: cls }, [`${lang.flag} ${lang.name} · ${lang.statusLabel}`.trim()]));
+    }
+    panel.append(
+      el('div', { class: 'learned' }, [
+        el('b', {}, [t.resultsCounted]),
+        chips,
+        el('p', { class: 'res-summary', style: 'margin-bottom:0' }, [`${t.resultsNext}: ${r.learned.nextSummary}`]),
+      ]),
+    );
+  } else if (!r.working && r.demoAudience !== 'done') {
+    panel.append(el('p', { class: 'fine' }, [t.resultsLearning]));
+  }
+
+  const actions = el('div', { class: 'actions' });
+  if (r.canSendAudience && isAuthor && me) {
+    const button = el('button', { type: 'button', class: 'btn2', disabled: state.audienceAsked }, [t.audienceCta]);
+    button.addEventListener('click', () => {
+      state.audienceAsked = true;
+      drawAll();
+      void ask({ type: 'audience', body: { postId, requesterHandle: me } }).then((response) => {
+        if (!response.ok) {
+          state.audienceAsked = false;
+          state.message = { text: fill(t.requestFailed, { detail: response.error }), error: true };
+        }
+        drawAll();
+        scheduleSoon();
+      });
+    });
+    actions.append(button);
+  }
+  actions.append(el('a', { class: 'btn2', href: r.dashboardUrl, target: '_blank', rel: 'noopener' }, [t.resultsDashboard]));
+  panel.append(actions);
+
+  if (r.includesSimulated) panel.append(el('p', { class: 'fine' }, [t.resultsSimulated]));
+  return panel;
 }
 
 function watchChip(dub: ExtensionDubDto): HTMLAnchorElement {

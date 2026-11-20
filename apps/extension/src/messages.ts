@@ -8,9 +8,11 @@
  */
 
 import type {
+  ExtensionAudienceRequestDto,
   ExtensionConfigDto,
   ExtensionDubRequestDto,
   ExtensionObservedPostDto,
+  ExtensionResultsDto,
   ExtensionStatusResponseDto,
 } from '@parrot/shared';
 
@@ -19,6 +21,8 @@ export type Request =
   | { readonly type: 'posts'; readonly ids: readonly string[] }
   | { readonly type: 'observe'; readonly posts: readonly ExtensionObservedPostDto[] }
   | { readonly type: 'request'; readonly body: ExtensionDubRequestDto }
+  | { readonly type: 'results'; readonly postId: string }
+  | { readonly type: 'audience'; readonly body: ExtensionAudienceRequestDto }
   | { readonly type: 'getServer' }
   | { readonly type: 'setServer'; readonly server: string };
 
@@ -31,6 +35,8 @@ export interface ResponseMap {
   setServer: string;
   observe: unknown;
   request: unknown;
+  results: ExtensionResultsDto;
+  audience: unknown;
 }
 
 declare const __PARROT_SERVER__: string | undefined;

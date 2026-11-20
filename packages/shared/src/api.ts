@@ -533,6 +533,66 @@ export interface ExtensionObservedPostDto {
   readonly createdAt: string | null;
 }
 
+/**
+ * GET /api/extension/results?postId=  -  everything the strip under a video
+ * shows once it has been dubbed: each language's numbers, what the creator has
+ * paid, and what Parrot has learned. Pre-formatted, like every other payload.
+ */
+export interface ExtensionResultsDto {
+  readonly postId: string;
+  readonly handle: string;
+  readonly modeLabel: string;
+  /** One line: why these languages. */
+  readonly summary: string;
+  /** Still dubbing or checking at least one language. */
+  readonly working: boolean;
+  readonly measured: boolean;
+  readonly demoAudience: 'none' | 'arriving' | 'done';
+  /** The demo audience can be sent now (demo servers only). */
+  readonly canSendAudience: boolean;
+  readonly dubs: readonly {
+    readonly code: string;
+    readonly name: string;
+    readonly flag: string;
+    readonly state: DubState;
+    readonly statusLabel: string;
+    readonly views: number;
+    readonly breakEvenViews: number;
+    /** 0-100, for a progress bar. */
+    readonly breakEvenPercent: number;
+    readonly paidForItself: boolean;
+    readonly paid: MoneyDto;
+    readonly watchUrl: string | null;
+    /** Why it did not go live, when it did not. */
+    readonly problem: string | null;
+    readonly simulatedDub: boolean;
+  }[];
+  readonly totals: {
+    readonly views: number;
+    readonly value: MoneyDto;
+    readonly paid: MoneyDto;
+    readonly net: MoneyDto;
+    /** What Parrot spent making these dubs. The creator did not pay it. */
+    readonly dubCost: MoneyDto;
+    readonly budget: MoneyDto;
+  };
+  /** What the creator's earlier posts have taught Parrot. */
+  readonly learned: {
+    readonly basedOnPosts: number;
+    readonly nextSummary: string;
+    readonly languages: readonly {
+      readonly name: string;
+      readonly flag: string;
+      readonly status: 'untested' | 'testing' | 'winner' | 'dropped';
+      readonly statusLabel: string;
+      readonly avgViews: number;
+    }[];
+  };
+  readonly dashboardUrl: string;
+  /** Views from the demo audience are included in the numbers above. */
+  readonly includesSimulated: boolean;
+}
+
 export interface ExtensionObserveRequestDto {
   readonly posts: readonly ExtensionObservedPostDto[];
 }
@@ -548,6 +608,12 @@ export interface ExtensionDubRequestDto {
 
 export interface ExtensionDubAcceptedDto {
   readonly ok: true;
+}
+
+/** POST /api/extension/audience - demo servers only. */
+export interface ExtensionAudienceRequestDto {
+  readonly postId: string;
+  readonly requesterHandle: string;
 }
 
 export interface ExtensionStatusResponseDto {

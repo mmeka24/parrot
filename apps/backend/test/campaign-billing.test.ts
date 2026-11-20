@@ -37,14 +37,14 @@ const input = (creator: ReturnType<typeof setup>['creator'], id = 'src1') => ({
 });
 
 describe('campaign', () => {
-  it('orders six dubs on a first post, makes them, and Parrot pays for each', async () => {
+  it('orders eight dubs on a first post, makes them, and Parrot pays for each', async () => {
     const { store, creator, campaigns } = setup();
     const r = await campaigns.start(input(creator));
     if (r.kind !== 'started') throw new Error(r.kind);
-    expect(r.dubs).toHaveLength(6);
+    expect(r.dubs).toHaveLength(8);
     await campaigns.run(r.post.id);
     expect(store.dubsForPost(r.post.id).every((d) => d.state === 'PUBLISHED')).toBe(true);
-    expect(store.ledgerTotal(store.houseAccount().id, 'dub_cost')).toBe(micros(-6n * 250_000n));
+    expect(store.ledgerTotal(store.houseAccount().id, 'dub_cost')).toBe(micros(-8n * 250_000n));
   });
 
   it('scraps a dub that fails QC and never posts it; creator pays nothing', async () => {
@@ -110,5 +110,14 @@ describe('reading replies and the demo audience', () => {
     const a = demoViewsFor({ handle: 'maria', lang: 'es', postId: 'p', originalViews: 1_200_000 });
     expect(a).toBe(demoViewsFor({ handle: 'maria', lang: 'es', postId: 'p', originalViews: 1_200_000 }));
     expect(a).toBeGreaterThan(250);
+  });
+
+  it('gives any creator three clearly strong languages and mostly weak ones, so a demo has something to find', () => {
+    const langs = ['es', 'pt', 'hi', 'fr', 'de', 'ja', 'ko', 'ar', 'id'];
+    for (const handle of ['eyeftruth', 'someone', 'x']) {
+      const tastes = langs.map((l) => tasteFor(handle, l));
+      expect(tastes.filter((t) => t >= 1.6)).toHaveLength(3);
+      expect(tastes.filter((t) => t < 0.2).length).toBeGreaterThanOrEqual(4);
+    }
   });
 });

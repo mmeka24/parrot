@@ -19,15 +19,20 @@
  * the mechanism even though the audience is made up.
  */
 
-import { INTERACTIONS_PER_VIEW, X_AD_REACH_MILLIONS, languageByCode } from '@parrot/shared';
+import { INTERACTIONS_PER_VIEW, SUPPORTED_LANGUAGES, X_AD_REACH_MILLIONS, languageByCode } from '@parrot/shared';
 import type { MockXAdapter } from '../bot/mock-x-adapter.js';
 import type { Store } from '../store/store.js';
 import type { Dub } from '../store/types.js';
 
 /** Share of a language's market that opens a dub in the thread. Demo assumption. */
 const DUB_UPTAKE = 0.02;
-/** A post with no real reach is given this many views to size its audience from. */
-const FALLBACK_REACH = 250_000;
+/**
+ * A post with no real reach (a video posted a minute ago has 8 views) is sized
+ * as if it had this many, so the demo audience is big enough to show anything.
+ * It is a stand-in for the audience a real post would take weeks to collect,
+ * and everything it produces is labelled simulated.
+ */
+const FALLBACK_REACH = 1_200_000;
 const MIN_REACH = 20_000;
 /** Share of a dub's viewers who also open Parrot's page for it. */
 const PAGE_VISIT_SHARE = 0.05;
@@ -75,16 +80,21 @@ export function unit(seed: string): number {
 
 /**
  * How strongly this creator's audience takes to a language. Seeded creators
- * have a fixed profile; anyone else gets one derived from their handle, with
- * two or three strong languages and the rest weak, like a real audience.
+ * have a fixed profile. Anyone else gets one derived from their handle: their
+ * three strongest languages, two middling ones, and the rest weak, like a real
+ * audience (and so a demo always has something to find).
  */
 export function tasteFor(handle: string, lang: string): number {
   const known = KNOWN_TASTES[handle.toLowerCase()];
   if (known) return known[lang] ?? 0.1;
-  const roll = unit(`${handle.toLowerCase()}:${lang}`);
-  if (roll > 0.72) return 1.3 + unit(`${handle}:${lang}:strong`) * 1.2; // strong
-  if (roll > 0.55) return 0.5 + unit(`${handle}:${lang}:mid`) * 0.6; // middling
-  return 0.02 + unit(`${handle}:${lang}:weak`) * 0.2; // weak
+  const codes = SUPPORTED_LANGUAGES.map((l) => l.code).filter((code) => code !== 'en');
+  const ranked = codes.slice().sort((a, b) => unit(`${handle.toLowerCase()}:${b}`) - unit(`${handle.toLowerCase()}:${a}`));
+  const rank = ranked.indexOf(lang);
+  const jitter = unit(`${handle.toLowerCase()}:${lang}:taste`);
+  if (rank < 0) return 0.1;
+  if (rank < 3) return 1.6 + jitter * 1.0; // strong
+  if (rank < 5) return 0.4 + jitter * 0.4; // middling
+  return 0.03 + jitter * 0.15; // weak
 }
 
 /** The views a dub draws from the demo audience. */
@@ -125,7 +135,7 @@ export class DemoAudience {
 
     // Only dubs that have not had their audience yet: more can be added to a
     // post later, and they get theirs without the others being counted twice.
-    const dubs = store.dubsForPost(postId).filter((d) => d.state === 'PUBLISHED' && d.replyPostId && d.simulatedViews === 0);
+    const dubs = store.dubsForPost(postId).filter((d) => d.state === 'PUBLISHED' && d.simulatedViews === 0);
     if (dubs.length === 0) return false;
 
     this.active.add(postId);
@@ -161,11 +171,20 @@ export class DemoAudience {
   private deliver(dubId: string, views: number): void {
     const { store, mockX } = this.deps;
     const dub = store.getDub(dubId);
-    if (!dub?.replyPostId) return;
+    if (!dub) return;
 
-    mockX.addViews(dub.replyPostId, views);
-    const interactions = views * INTERACTIONS_PER_VIEW.likely;
-    mockX.addEngagement(dub.replyPostId, Math.round(interactions * 0.82), Math.round(interactions * 0.13));
+    // A dub posted in a thread gets its views on that post, which the view
+    // sync then reads back. A dub with no thread (a post seen only through the
+    // extension on x.com) has no post to count on, so they are counted on the
+    // dub directly. Either way they are labelled simulated.
+    let direct = 0;
+    if (dub.replyPostId) {
+      mockX.addViews(dub.replyPostId, views);
+      const interactions = views * INTERACTIONS_PER_VIEW.likely;
+      mockX.addEngagement(dub.replyPostId, Math.round(interactions * 0.82), Math.round(interactions * 0.13));
+    } else {
+      direct = views;
+    }
 
     // Some viewers open Parrot's page; that is where a country is recorded.
     const visits = Math.round(views * PAGE_VISIT_SHARE);
@@ -177,13 +196,14 @@ export class DemoAudience {
       placed += share;
       if (share > 0) countries[market.code] = (countries[market.code] ?? 0) + share;
     });
-    store.updateDub(dub.id, { simulatedViews: dub.simulatedViews + views, countries });
+    store.updateDub(dub.id, { simulatedViews: dub.simulatedViews + views, xViews: dub.xViews + direct, countries });
   }
 
   /** A few replies in the dub's language, more for a dub that did well. */
   private reply(dubId: string, views: number): void {
     const { store, mockX } = this.deps;
     const dub = store.getDub(dubId) as Dub | undefined;
+    // No thread, nothing to reply under.
     if (!dub?.replyPostId) return;
     const lines = SAMPLE_REPLIES[dub.lang] ?? [];
     const names = VIEWER_NAMES[dub.lang] ?? [];

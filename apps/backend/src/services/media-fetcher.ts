@@ -88,7 +88,18 @@ export class MediaFetcher {
    * Resolves null when yt-dlp is not installed. Throws MediaFetchError for
    * everything else (bad link, too long, no video, download failed).
    */
-  async fetch(url: string): Promise<string | null> {
+  /** Downloads in progress, so eight dubs of one post start one download, not eight. */
+  private readonly inflight = new Map<string, Promise<string | null>>();
+
+  fetch(url: string): Promise<string | null> {
+    const running = this.inflight.get(url);
+    if (running) return running;
+    const started = this.download(url).finally(() => this.inflight.delete(url));
+    this.inflight.set(url, started);
+    return started;
+  }
+
+  private async download(url: string): Promise<string | null> {
     const match = X_STATUS_URL.exec(url);
     if (!match) throw new MediaFetchError('that is not an x.com post link');
     const postId = match[2] as string;

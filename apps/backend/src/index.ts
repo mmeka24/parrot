@@ -18,7 +18,7 @@ import {
   type QcReport,
 } from '@parrot/shared';
 import { createApp } from './api/routes.js';
-import { mediaUrl } from './api/mappers.js';
+import { extensionResults, mediaUrl } from './api/mappers.js';
 import { BotService, replies } from './bot/bot-service.js';
 import { MockXAdapter } from './bot/mock-x-adapter.js';
 import { createXApiAdapter, type XAdapter } from './bot/x-adapter.js';
@@ -103,7 +103,11 @@ function dubbingPort(
  * injected report is marked `demo_injected` and says so in its own words:
  * staging a demo is fine, pretending it was observed is not.
  */
-function qcPort(service: QcService, resolveSource: (sourceUrl: string) => SourceMedia): QcPort {
+function qcPort(
+  service: QcService,
+  resolveSource: (sourceUrl: string) => SourceMedia,
+  fetcher: MediaFetcher,
+): QcPort {
   return {
     async run({ dubPath, sourceDurationS, targetLang, simulated, sourceUrl, forceFail }) {
       if (forceFail) {
@@ -130,6 +134,10 @@ function qcPort(service: QcService, resolveSource: (sourceUrl: string) => Source
       }
 
       const source = resolveSource(sourceUrl);
+      // A post read off x.com: the original was downloaded to make the dub, so
+      // the meaning check can compare against that same file (no second
+      // download: the fetcher remembers it).
+      const fetched = source.kind === 'x' && !simulated ? await fetcher.fetch(sourceUrl).catch(() => null) : null;
       return service.run({
         // The stand-in render is named `.sim.wav` by DubbingService. It has no
         // real speech, so its speech checks are skipped rather than run.
@@ -143,7 +151,9 @@ function qcPort(service: QcService, resolveSource: (sourceUrl: string) => Source
         // uploaded file or a real public link. Seeded posts have no media and
         // an x.com page is not media itself, so both skip it (and say so).
         sourcePath:
-          source.kind === 'file'
+          fetched
+            ? fetched
+            : source.kind === 'file'
             ? source.path
             : source.kind === 'remote' && /^https:\/\//.test(sourceUrl)
               ? sourceUrl
@@ -220,10 +230,12 @@ async function main(): Promise<void> {
     },
   };
 
+  const fetcher = new MediaFetcher();
   const campaigns = new CampaignService({
     store,
-    dubbing: dubbingPort(new DubbingService(), resolveSource, new MediaFetcher()),
-    qc: qcPort(new QcService({ ffmpegPath: config.env.FFMPEG_PATH }), resolveSource),
+    dubbing: dubbingPort(new DubbingService(), resolveSource, fetcher),
+    qc: qcPort(new QcService({ ffmpegPath: config.env.FFMPEG_PATH }), resolveSource, fetcher),
+    exploreCount: config.env.EXPLORE_LANGUAGES,
     publisher,
     available: (creator) => payer.available(creator),
     announce: async (inReplyToId, kind, lang) => {
@@ -327,6 +339,28 @@ async function main(): Promise<void> {
       adapter,
       botHandle: config.env.X_BOT_HANDLE,
       dubObservedPost: (post, lang) => flow.dubObservedPost(post, lang),
+      results: (postId) => {
+        const post = store.findPostBySource(postId);
+        const creator = post ? store.creators.get(post.creatorId) : undefined;
+        if (!post || !creator) return null;
+        return extensionResults({
+          store,
+          creator,
+          post,
+          plan: campaigns.plan(creator),
+          postsMeasured: campaigns.history(creator).length,
+          canSendAudience: demoAudience !== null,
+          webUrl: config.env.PUBLIC_WEB_URL,
+        });
+      },
+      ...(demoAudience
+        ? {
+            sendAudience: (postId: string) => {
+              const post = store.findPostBySource(postId);
+              return post ? demoAudience.send(post.id, { waves: 6, waveMs: 1_200 }) : Promise.resolve(false);
+            },
+          }
+        : {}),
     },
   });
 

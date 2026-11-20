@@ -95,6 +95,8 @@ export interface CampaignDeps {
   readonly now?: () => Date;
   /** How long a post's dubs are watched before the results count. */
   readonly measureWindowMs: number;
+  /** Languages tried while still learning. Defaults to the shared setting. */
+  readonly exploreCount?: number;
 }
 
 export interface StartInput {
@@ -161,7 +163,10 @@ export class CampaignService {
 
   /** The plan for this creator's next post. */
   plan(creator: Creator): LanguagePlan {
-    return planLanguages(this.history(creator), { sourceLang: creator.sourceLang });
+    return planLanguages(this.history(creator), {
+      sourceLang: creator.sourceLang,
+      ...(this.deps.exploreCount !== undefined ? { exploreCount: this.deps.exploreCount } : {}),
+    });
   }
 
   /**

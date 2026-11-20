@@ -10,7 +10,7 @@ Built for UBC 26. Main track: **Consumer Applications**. Chain: **Arc testnet**.
 
 | Part | Status |
 | --- | --- |
-| Language planner (explore, then focus on winners), P&L maths, billing | **Real.** Pure, tested (303 tests). |
+| Language planner (explore, then focus on winners), P&L maths, billing | **Real.** Pure, tested (314 tests). |
 | ElevenLabs dubbing | **Real** with `ELEVENLABS_API_KEY`; otherwise a labelled stand-in. Seeded demo posts have no footage, so their dubs are always stand-ins. |
 | Quality check | **Real and fail-closed.** ffmpeg measures; xAI/Grok hears and judges meaning. ElevenLabs never grades its own dubs. |
 | Creator payments on Arc | **Real** for signed-in creators (own Arc wallet, USDC transfer per billing batch, "Verify on Arc" link). Demo creators pay from a labelled test balance with no link. |
@@ -22,9 +22,19 @@ Built for UBC 26. Main track: **Consumer Applications**. Chain: **Arc testnet**.
 
 ## How it works
 
-1. **Posts 1-2: explore.** Six languages (biggest X audience first); the second post keeps the best half and swaps in new ones.
+1. **Posts 1-2: explore.** Eight languages (biggest X audience first; `EXPLORE_LANGUAGES`); the second post keeps the best half and swaps in new ones.
 2. **Post 3+: focus.** Up to 3 proven languages plus one test. A language is *proven* when its dubs average the views needed to pay for themselves (a 30s dub costs $0.25, so 250 views); *dropped* after two misses or one clear miss; retried every 5 posts.
 3. **Money.** Parrot pays ElevenLabs per dub up front. The creator is charged per counted view in hourly batches (12s in demo), capped by post budget and balance. The creator's own rate per 1,000 views ("worth") is shown as *their* number, never as income.
+
+## Demo on real x.com with the extension
+
+The extension is the product surface. On x.com it adds **Dub this** under your own video; after you click it, the same strip fills in with the results: each language's views against the views it needs to pay for itself, what you owe, what the views are worth at your rate, and what Parrot has learned.
+
+```
+npm run build:extension   # then Load unpacked: apps/extension/dist
+```
+
+What works on x.com and what does not: Parrot cannot post to X or read X's view counts (no API access), so the dubs are not posted in the thread. Each lives on its own Parrot page, and views come from that page plus, on a demo server, a **simulated audience** sent with the strip's **Send demo audience** button (always labelled). Everything the extension reads off the page is unverified. A real dub of an x.com video needs `yt-dlp`, `ffmpeg`, `ELEVENLABS_API_KEY` and `XAI_API_KEY`; cost is about $0.50 per minute of video per language.
 
 ## Run it
 

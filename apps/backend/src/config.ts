@@ -10,7 +10,7 @@
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { ARC_TESTNET } from '@parrot/shared';
+import { ARC_TESTNET, EXPLORE_LANGUAGE_COUNT } from '@parrot/shared';
 
 /** apps/backend/src/config.ts -> the repository root. */
 const REPO_ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../../..');
@@ -68,6 +68,12 @@ const envSchema = z.object({
   EMAIL_FROM: optionalString,
   /** Testnet USDC sent to a new user's wallet at signup, once, in USD ("1.00"). */
   SIGNUP_BONUS_USD: z.string().default('1.00'),
+  /**
+   * How many languages a creator's first posts are dubbed into while Parrot is
+   * still learning. Each real dub costs ElevenLabs money (about $0.50 a minute
+   * of video, per language), so lower this when testing on long videos.
+   */
+  EXPLORE_LANGUAGES: z.coerce.number().int().min(1).max(9).default(EXPLORE_LANGUAGE_COUNT),
   /** At most this many new wallets are funded per UTC day, so the Treasury is bounded. */
   SIGNUP_DAILY_LIMIT: z.coerce.number().int().nonnegative().default(25),
   /**
