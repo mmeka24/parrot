@@ -18,6 +18,7 @@ import type {
   DubPageDto,
   InjectMentionRequestDto,
   InjectMentionResponseDto,
+  MoneyDto,
   ReceiptDto,
   SystemStatusDto,
   UnlockResponseDto,
@@ -43,6 +44,23 @@ interface RequestOptions {
   readonly passErrors?: boolean;
 }
 
+/**
+ * On the server (a page being rendered), the browser's cookies are not sent to
+ * the backend by themselves. Without forwarding the session cookie, every page
+ * would render as if nobody were signed in. In the browser this is a no-op:
+ * `credentials: 'include'` already sends them.
+ */
+async function serverCookies(): Promise<string | null> {
+  if (typeof window !== 'undefined') return null;
+  try {
+    const { cookies } = await import('next/headers');
+    const all = (await cookies()).toString();
+    return all === '' ? null : all;
+  } catch {
+    return null; // not inside a request (build time)
+  }
+}
+
 async function request<T>(
   path: string,
   init?: RequestInit,
@@ -50,6 +68,7 @@ async function request<T>(
 ): Promise<T | null> {
   if (!backendConfigured) return null;
   try {
+    const forwarded = await serverCookies();
     const res = await fetch(BASE + path, {
       ...init,
       cache: 'no-store',
@@ -57,7 +76,11 @@ async function request<T>(
       // browser neither sends nor keeps it, and every unlock is a new viewer.
       credentials: 'include',
       signal: AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS),
-      headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+      headers: {
+        'content-type': 'application/json',
+        ...(forwarded ? { cookie: forwarded } : {}),
+        ...(init?.headers ?? {}),
+      },
     });
     if (!res.ok) {
       if (!options.passErrors) return null;
@@ -237,3 +260,64 @@ export async function setDemoTraffic(running: boolean): Promise<DemoStateDto | n
 export function streamUrl(): string | null {
   return backendConfigured ? BASE + '/api/stream' : null;
 }
+
+
+// ---------------------------------------------------------------------------
+// Accounts: /api/auth/config, /api/me, sign in, sign out
+// ---------------------------------------------------------------------------
+
+export interface AuthConfig {
+  readonly enabled: boolean;
+  readonly providers: { readonly email: boolean; readonly google: boolean };
+  /** What a new account starts with, for display ("$1.00"). */
+  readonly bonus: string;
+}
+
+export interface Me {
+  readonly signedIn: boolean;
+  readonly email?: string;
+  readonly balance?: MoneyDto | null;
+  /** 'funded' once the starting balance has arrived. */
+  readonly funding?: 'none' | 'pending' | 'funded' | 'failed';
+}
+
+/** Null when this server does not have accounts turned on. */
+export async function getAuthConfig(): Promise<AuthConfig | null> {
+  const config = await request<AuthConfig>('/api/auth/config');
+  return config && config.enabled ? config : null;
+}
+
+export async function getMe(): Promise<Me> {
+  return (await request<Me>('/api/me')) ?? { signedIn: false };
+}
+
+type Failure = { readonly ok: false; readonly title: string; readonly detail: string };
+
+export async function startEmailSignIn(email: string): Promise<{ ok: true } | Failure> {
+  const result = await request<{ ok: true } | Failure>(
+    '/api/auth/email/start',
+    { method: 'POST', body: JSON.stringify({ email }) },
+    { passErrors: true, timeoutMs: 15_000 },
+  );
+  return (
+    result ?? { ok: false, title: 'We could not reach Parrot', detail: 'Check your connection and try again.' }
+  );
+}
+
+export async function verifyEmailSignIn(token: string): Promise<{ ok: true; created: boolean } | Failure> {
+  const result = await request<{ ok: true; created: boolean } | Failure>(
+    '/api/auth/email/verify',
+    { method: 'POST', body: JSON.stringify({ token }) },
+    { passErrors: true, timeoutMs: 15_000 },
+  );
+  return (
+    result ?? { ok: false, title: 'We could not reach Parrot', detail: 'Check your connection and try again.' }
+  );
+}
+
+export async function signOut(): Promise<void> {
+  await request('/api/auth/logout', { method: 'POST', body: '{}' });
+}
+
+/** Where the Google button sends the browser. A full navigation, not a fetch. */
+export const googleSignInUrl = BASE + '/api/auth/google/start';

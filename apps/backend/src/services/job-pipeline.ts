@@ -43,6 +43,7 @@ import {
   HOUSE_DUB_PROVIDER,
   type DecisionOutcome,
 } from './decision-service.js';
+import { makePreview } from './preview.js';
 import { dubExternally } from './external-dubbing.js';
 import { PaymentService } from './payment-service.js';
 import { agentPrivateKey, getConfig } from '../config.js';
@@ -50,6 +51,8 @@ import { recordAuctionOnchain, recordQcOnchain } from '../chain/splitter.js';
 import { collectExternalBids } from './external-bids.js';
 
 export interface PipelineHooks {
+  /** Cuts the free preview of a dub. Defaults to ffmpeg; null means no preview. */
+  previewMaker?: (fullPath: string) => Promise<string | null>;
   /** Called after every accepted transition, for SSE and bot replies. */
   onTransition?: (job: Job, event: JobEventType) => void | Promise<void>;
   /** Makes a dub with an agent's own provider. Tests inject a fake. */
@@ -424,7 +427,11 @@ export class JobPipeline {
         return this.advance(
           this.store.getJob(job.id) as Job,
           'DUB_RENDERED',
-          { providerJobId: `external:${job.id}`, dubUrl: external.localPath, previewUrl: external.localPath },
+          {
+            providerJobId: `external:${job.id}`,
+            dubUrl: external.localPath,
+            previewUrl: await (this.hooks.previewMaker ?? makePreview)(external.localPath),
+          },
           { simulated: false, provider },
         );
       } catch (error: unknown) {
@@ -469,7 +476,7 @@ export class JobPipeline {
       {
         providerJobId: created.providerJobId,
         dubUrl: downloaded.localPath,
-        previewUrl: downloaded.localPath,
+        previewUrl: await (this.hooks.previewMaker ?? makePreview)(downloaded.localPath),
       },
       { simulated: created.simulated || downloaded.simulated, durationS: downloaded.durationS },
     );

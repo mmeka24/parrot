@@ -642,3 +642,41 @@ so the stream filter matches the ERC-20 address only.
 ---
 
 Built in six days. The parts that are real are tested; the parts that are not are labelled.
+
+---
+
+## Accounts and per-user wallets
+
+With accounts on, nobody unlocks a dub as an anonymous guest. A person signs in (Google, or
+a one-time link emailed to them), Parrot creates a wallet for them on Arc, sends it a
+starting **$1 of testnet USDC** from the Treasury, and each unlock is then paid from *their
+own* wallet.
+
+- **Custodial, stated plainly.** Parrot generates the wallet and keeps its key, encrypted at
+  rest (AES-256-GCM, bound to the user's id) with `WALLET_ENCRYPTION_KEY`. The user never
+  handles a key. Lose `WALLET_ENCRYPTION_KEY` and every user wallet is unrecoverable, so back
+  it up. Real-money use would need non-custodial wallets and a proper audit.
+- **The bonus is a faucet pointed at a real wallet,** so it is guarded: once per user, a daily
+  cap (`SIGNUP_DAILY_LIMIT`), the Treasury keeps a $1 reserve, sends are serialised, and a
+  send whose confirmation is lost can never pay twice (the wallet's on-chain balance is
+  checked first).
+- **Sign-in links** work once, expire after 15 minutes, and open a *page* that confirms with a
+  POST, so an email scanner that "opens" the link cannot use it up. Only hashes of tokens are
+  stored. Asking for a link never reveals whether an address has an account.
+- **The paywall is on the file, not just the page.** The free preview is a separate 8-second
+  clip (ffmpeg). The full dub is served only to the signed-in user who unlocked *that* dub;
+  if no preview can be cut, there is no preview, never the full file.
+- **Storage:** users, sessions and wallets live in a small SQLite file (`USERS_DB_PATH`, Node
+  >= 22.13), on the `/data` volume on Fly. The rest of the backend still keeps its state in
+  memory and loses it on restart.
+- **Same origin for cookies.** The website proxies `/api` and `/media` to the backend
+  (`BACKEND_ORIGIN`), so the session cookie is first-party. Safari and Brave block cross-site
+  cookies, and Fly's `*.fly.dev` domains count as different sites. Set the backend's
+  `PUBLIC_BACKEND_URL` to the website's address so media links go through the proxy too.
+
+Accounts switch on only when all of these are set: `WALLET_ENCRYPTION_KEY`, the on-chain keys,
+and at least one sign-in method (`RESEND_API_KEY` + `EMAIL_FROM`, or the two Google keys).
+Otherwise the old guest flow runs. See `.env.example`.
+
+**Not covered:** creators still have no payout wallet of their own, and nothing here changes
+that. Gas on Arc is paid in USDC, so each unlock costs the user about $0.001 on top of $0.02.

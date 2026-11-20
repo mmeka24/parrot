@@ -8,6 +8,7 @@
 
 import express, { type Express, type Request, type Response } from 'express';
 import { randomUUID } from 'node:crypto';
+import { basename, resolve } from 'node:path';
 import {
   copy,
   fill,
@@ -15,6 +16,8 @@ import {
   languageName,
   UNLOCK_PRICE,
   isPublished,
+  microsToErc20Units,
+  parseUsd,
   type ApiErrorDto,
   type AgentDashboardDto,
   type BotConsoleDto,
@@ -45,14 +48,27 @@ import {
   tickerFromUnlock,
 } from './mappers.js';
 import { getConfig } from '../config.js';
+import type { Accounts } from '../users/accounts.js';
+import { registerAuthRoutes } from '../users/routes.js';
 import { registerXCloneRoutes, type XCloneDeps } from '../xclone/routes.js';
 import { registerExtensionRoutes, type ExtensionDeps } from '../extension/routes.js';
 import { AgentRegistry, AgentRegistrationError } from '../services/agent-registry.js';
+
+/**
+ * Gas for the approval and the unlock transaction, kept aside on top of the
+ * price. Arc charges gas in USDC, so a wallet holding exactly the price could
+ * not actually send it.
+ */
+const GAS_RESERVE = micros(15_000n);
+
+const getBonusMicros = () => parseUsd(getConfig().env.SIGNUP_BONUS_USD);
 
 /** Cookie that identifies a guest viewer. No sign-in, no popup, no wallet. */
 const VIEWER_COOKIE = 'parrot_viewer';
 
 export interface RouteDeps {
+  /** Sign-in and per-user wallets. When absent, the legacy guest flow runs. */
+  accounts?: Accounts;
   store: Store;
   payments: PaymentService;
   pipeline: JobPipeline;
@@ -100,6 +116,40 @@ export function createApp(deps: RouteDeps): Express {
 
   app.use(express.json({ limit: '1mb' }));
 
+  // A full dub is paid content. With accounts on, its file is served only to
+  // the signed-in user who unlocked THAT dub; the preview, poster and the
+  // creator's original upload stay public. (A preview is a separate, short
+  // file: see services/preview.ts.) Without accounts, behaviour is unchanged.
+  app.use('/media', (req, res, next) => {
+    const accounts = deps.accounts;
+    if (!accounts) return next();
+
+    let name: string;
+    try {
+      name = basename(decodeURIComponent(req.path));
+    } catch {
+      return res.sendStatus(400);
+    }
+    const job = store.allJobs().find((j) => j.dubUrl !== null && basename(j.dubUrl) === name);
+    if (!job) return next(); // not a paid file
+
+    const user = accounts.userFor(req);
+    if (!user || !store.findUnlock(job.id, user.id)) {
+      return res.status(403).json({
+        ok: false,
+        code: 'SIGN_IN_REQUIRED',
+        title: copy.errors.notSignedInTitle,
+        detail: copy.errors.notSignedInBody,
+      } satisfies ApiErrorDto);
+    }
+    // Range requests (seeking) are handled by sendFile. Never cache a paid file
+    // in a shared cache.
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.sendFile(name, { root: resolve(getConfig().env.MEDIA_STORAGE_DIR), dotfiles: 'deny' }, (error) => {
+      if (error && !res.headersSent) res.sendStatus(404);
+    });
+  });
+
   // Serve rendered dubs. Without this the dub page 404s on its own media.
   app.use(
     '/media',
@@ -138,6 +188,19 @@ export function createApp(deps: RouteDeps): Express {
   });
   app.options('*', (_req, res) => res.sendStatus(204));
 
+  if (deps.accounts) {
+    registerAuthRoutes(app, {
+      accounts: deps.accounts,
+      bonusDisplay: formatUsd(getBonusMicros()),
+      allowedOrigins: () => {
+        const { PUBLIC_WEB_URL, PUBLIC_XCLONE_URL, NODE_ENV } = getConfig().env;
+        const list = [PUBLIC_WEB_URL.replace(/\/$/, ''), PUBLIC_XCLONE_URL.replace(/\/$/, '')];
+        if (NODE_ENV !== 'production') list.push('http://localhost:3100', 'http://localhost:3000');
+        return list;
+      },
+    });
+  }
+
   // -------------------------------------------------------------------------
   // Viewer identity: a cookie, created silently. No wallet, no sign-in.
   // -------------------------------------------------------------------------
@@ -152,6 +215,24 @@ export function createApp(deps: RouteDeps): Express {
     return getConfig().env.PUBLIC_BACKEND_URL.startsWith('https://')
       ? 'SameSite=None; Secure'
       : 'SameSite=Lax';
+  }
+
+  /**
+   * Who is looking at a page. With accounts on, only a signed-in user is a
+   * viewer; a guest has no account, no balance and cannot unlock. Without
+   * accounts, the legacy silent guest applies.
+   */
+  async function viewerForRead(req: Request, res: Response): Promise<string | null> {
+    const accounts = deps.accounts;
+    if (!accounts) return currentViewer(req, res, true);
+    const user = accounts.userFor(req);
+    if (!user) return null;
+    try {
+      await accounts.syncLedger(user);
+    } catch {
+      // Chain unreachable: show the page without a fresh balance.
+    }
+    return accounts.accountFor(user).id;
   }
 
   function currentViewer(req: Request, res: Response, create: boolean): string | null {
@@ -187,7 +268,7 @@ export function createApp(deps: RouteDeps): Express {
   // Dub page
   // -------------------------------------------------------------------------
 
-  app.get('/api/dubs/:id', (req, res) => {
+  app.get('/api/dubs/:id', async (req, res) => {
     const job = store.getJob(req.params.id as string);
     if (!job) {
       return sendError(res, 404, {
@@ -197,7 +278,7 @@ export function createApp(deps: RouteDeps): Express {
         detail: copy.errors.dubNotFoundBody,
       });
     }
-    const viewerId = currentViewer(req, res, true);
+    const viewerId = await viewerForRead(req, res);
     res.json(dubPage(store, job, viewerId));
   });
 
@@ -221,7 +302,20 @@ export function createApp(deps: RouteDeps): Express {
       });
     }
 
-    const viewerId = currentViewer(req, res, true);
+    // With accounts on, only a signed-in user can unlock, and they pay from
+    // their OWN wallet. Without accounts, the legacy guest pays from the pool.
+    const accounts = deps.accounts;
+    const user = accounts?.userFor(req);
+    if (accounts && !user) {
+      return sendError(res, 401, {
+        ok: false,
+        code: 'SIGN_IN_REQUIRED',
+        title: copy.errors.notSignedInTitle,
+        detail: copy.errors.notSignedInBody,
+      });
+    }
+
+    const viewerId = user && accounts ? accounts.accountFor(user).id : currentViewer(req, res, true);
     if (!viewerId) {
       return sendError(res, 500, {
         ok: false,
@@ -246,6 +340,22 @@ export function createApp(deps: RouteDeps): Express {
       // The viewer pays on-chain: a real USDC transfer to the revenue wallet,
       // confirmed before the unlock is recorded. See recordPaidUnlock.
       const revenueAccount = [...store.accounts.values()].find((a) => a.kind === 'revenue');
+      const splitterRoute = payments.splitterRouteFor(job);
+
+      let payerKey = getConfig().env.VIEWER_POOL_PRIVATE_KEY as `0x${string}` | undefined;
+      if (user && accounts && !store.findUnlock(job.id, viewerId)) {
+        // Their wallet pays, so first make sure it really holds the price plus
+        // the gas to send it. Re-watching an unlocked dub is free and skips this.
+        const onchain = await accounts.syncLedger(user);
+        if ((onchain as bigint) < (UNLOCK_PRICE as bigint) + (GAS_RESERVE as bigint)) {
+          throw new InsufficientBalanceError(onchain, UNLOCK_PRICE);
+        }
+        payerKey = accounts.wallets.keyFor(user);
+        if (splitterRoute) {
+          await accounts.wallets.ensureAllowance(user, splitterRoute.address, microsToErc20Units(UNLOCK_PRICE));
+        }
+      }
+
       const result = await payments.recordPaidUnlock({
         jobId: job.id,
         viewerAccountId: viewerId,
@@ -254,9 +364,9 @@ export function createApp(deps: RouteDeps): Express {
         creatorAccountId: creator.accountId,
         splitAgentBps: job.splitAgentBps,
         splitCreatorBps: job.splitCreatorBps,
-        viewerPoolPrivateKey: getConfig().env.VIEWER_POOL_PRIVATE_KEY as `0x${string}` | undefined,
+        viewerPoolPrivateKey: payerKey,
         revenueAccountId: revenueAccount?.id,
-        splitter: payments.splitterRouteFor(job),
+        splitter: splitterRoute,
       });
 
       await pipeline.notePaidUnlock(job.id);

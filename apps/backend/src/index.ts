@@ -28,6 +28,7 @@ import { QcService } from './services/qc-service.js';
 import { MediaFetcher, X_STATUS_URL } from './services/media-fetcher.js';
 import { JobPipeline, type DubbingPort, type QcPort } from './services/job-pipeline.js';
 import { SettlementScheduler } from './payments/settlement-scheduler.js';
+import { buildAccounts } from './users/setup.js';
 import { MockXAdapter, MOCK_SEED_POSTS } from './bot/mock-x-adapter.js';
 import { BotService, composeReply } from './bot/bot-service.js';
 import { parseIntent } from './bot/grok-parser.js';
@@ -489,7 +490,10 @@ async function main(): Promise<void> {
   learning.start();
   scheduler.start();
 
+  const { accounts, status: accountsStatus } = await buildAccounts(config, store);
+
   const app = createApp({
+    ...(accounts ? { accounts } : {}),
     store,
     payments,
     pipeline,
@@ -519,6 +523,7 @@ async function main(): Promise<void> {
   app.listen(port, () => {
     console.log(`\n  Parrot backend on http://localhost:${port}`);
     console.log(`  Demo mode: ${config.isDemoMode ? 'on' : 'off'}`);
+    console.log(`  Accounts: ${accountsStatus}`);
     if (config.mockedSubsystems.length > 0) {
       console.log(`  Simulated: ${config.mockedSubsystems.join(', ')}`);
     }

@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import type { SystemStatusDto } from '@parrot/shared';
 import { copy } from '@parrot/shared';
 import { localCopy } from '@/lib/local-copy';
+import { AccountChip } from './AccountChip';
 import { ParrotMark } from './ParrotMark';
 
 const NAV = [
@@ -98,6 +99,8 @@ export function SiteHeader({ status }: { status: SystemStatusDto }) {
         >
           {open ? localCopy.nav.close : localCopy.nav.menu}
         </button>
+
+        <AccountChip />
       </div>
 
       {open ? (

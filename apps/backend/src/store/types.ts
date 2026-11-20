@@ -31,7 +31,9 @@ export type LedgerKind =
   | 'dub_cost'
   | 'settlement_out'
   | 'settlement_in'
-  | 'creator_payout';
+  | 'creator_payout'
+  /** Aligns a signed-in user's ledger with their on-chain wallet balance. */
+  | 'wallet_sync';
 
 export interface Account {
   id: string;

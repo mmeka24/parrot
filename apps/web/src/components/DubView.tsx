@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ApiErrorDto, DubPageDto, MoneyDto, ReceiptDto } from '@parrot/shared';
 import { copy, fill, isPublished } from '@parrot/shared';
+import { useAccount } from '@/lib/account';
 import { unlockDub } from '@/lib/api';
 import { localCopy } from '@/lib/local-copy';
 import { ReceiptDrawer } from './ReceiptDrawer';
@@ -13,6 +14,7 @@ type Phase = 'locked' | 'unlocking' | 'unlocked';
 
 export function DubView({ dub }: { dub: DubPageDto }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const account = useAccount();
 
   const [phase, setPhase] = useState<Phase>(dub.unlocked ? 'unlocked' : 'locked');
   const [src, setSrc] = useState<string | null>(dub.unlocked ? dub.fullUrl : dub.previewUrl);
@@ -26,6 +28,22 @@ export function DubView({ dub }: { dub: DubPageDto }) {
   const [balance, setBalance] = useState<MoneyDto | null>(dub.viewerBalance);
   const [receipts, setReceipts] = useState<readonly ReceiptDto[]>(dub.receipts);
   const [error, setError] = useState<ApiErrorDto | null>(null);
+
+  // With accounts on, only a signed-in person can unlock. A session that ended
+  // while the page was open comes back from the server as SIGN_IN_REQUIRED.
+  //
+  // Before the account state has loaded, the server's own answer is the hint:
+  // with accounts on, a signed-out viewer comes back with no balance at all
+  // (the old guest flow always gave one). That avoids a flash of an unlock
+  // button that is about to turn into a sign-in prompt.
+  const signedOutHint = dub.viewerBalance === null && !dub.unlocked;
+  const needsSignIn =
+    phase !== 'unlocked' &&
+    (account.status === 'out' ||
+      (account.status === 'loading' && signedOutHint) ||
+      (error !== null && error.code === 'SIGN_IN_REQUIRED'));
+  const accountsOn = account.status === 'out' || account.status === 'in';
+  const signInHref = '/signin?next=' + encodeURIComponent('/dub/' + dub.jobId);
 
   const playable = isPublished(dub.state) && src !== null;
 
@@ -70,12 +88,14 @@ export function DubView({ dub }: { dub: DubPageDto }) {
     if (!result.ok) {
       setPhase('locked');
       setError(result);
+      if (result.code === 'SIGN_IN_REQUIRED') void account.refresh();
       return;
     }
     setPhase('unlocked');
     setJustUnlocked(true);
     setGateHit(false);
     setBalance(result.viewerBalance);
+    void account.refresh(); // keep the header balance honest
     setReceipts([result.receipt, ...receipts]);
     setSrc(result.fullUrl);
 
@@ -288,6 +308,13 @@ export function DubView({ dub }: { dub: DubPageDto }) {
               <h2 className="panel-title">{copy.viewer.unlockedTitle}</h2>
               <p className="panel-sub">{copy.viewer.unlockedBody}</p>
             </div>
+          ) : needsSignIn ? (
+            <div className="stack" style={{ ['--stack' as string]: '0.4rem' }}>
+              <h2 className="panel-title">{localCopy.account.needsSignInTitle}</h2>
+              <p className="panel-sub">
+                {fill(localCopy.account.needsSignInBody, { bonus: account.config?.bonus ?? '$1.00' })}
+              </p>
+            </div>
           ) : (
             <div className="stack" style={{ ['--stack' as string]: '0.4rem' }}>
               <h2 className="panel-title">{copy.viewer.previewEndedTitle}</h2>
@@ -295,7 +322,7 @@ export function DubView({ dub }: { dub: DubPageDto }) {
             </div>
           )}
 
-          {error ? (
+          {error && error.code !== 'SIGN_IN_REQUIRED' ? (
             <div
               role="alert"
               className="fade-in"
@@ -316,6 +343,10 @@ export function DubView({ dub }: { dub: DubPageDto }) {
               <button type="button" className="btn btn-primary btn-lg" onClick={play}>
                 {copy.viewer.rewatchCta}
               </button>
+            ) : needsSignIn ? (
+              <Link className="btn btn-primary btn-lg" href={signInHref} style={{ flex: '1 1 14rem', textAlign: 'center' }}>
+                {localCopy.account.needsSignInCta}
+              </Link>
             ) : (
               <button
                 type="button"
@@ -343,16 +374,22 @@ export function DubView({ dub }: { dub: DubPageDto }) {
                 {copy.viewer.balanceLabel}: {balance.display}
               </span>
             ) : null}
-            <span className="chip chip-accent">
-              {fill(copy.viewer.starterCreditTitle, { amount: '$1.00' })}
-            </span>
-            <span className="chip chip-muted" aria-disabled="true">
-              {copy.viewer.cardSoon}
-            </span>
+            {accountsOn ? null : (
+              <>
+                <span className="chip chip-accent">
+                  {fill(copy.viewer.starterCreditTitle, { amount: '$1.00' })}
+                </span>
+                <span className="chip chip-muted" aria-disabled="true">
+                  {copy.viewer.cardSoon}
+                </span>
+              </>
+            )}
           </div>
-          <p style={{ fontSize: '0.78rem', color: 'var(--ink-faint)' }}>
-            {copy.viewer.starterCreditBody}
-          </p>
+          {accountsOn ? null : (
+            <p style={{ fontSize: '0.78rem', color: 'var(--ink-faint)' }}>
+              {copy.viewer.starterCreditBody}
+            </p>
+          )}
         </section>
       ) : (
         <UnavailableNotice dub={dub} />

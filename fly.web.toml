@@ -6,11 +6,14 @@ primary_region = "sjc"
   dockerfile = "Dockerfile.next"
   [build.args]
     APP = "web"
-    NEXT_PUBLIC_BACKEND_URL = "https://parrot-backend.fly.dev"
+    NEXT_PUBLIC_BACKEND_URL = "https://parrot-web.fly.dev"
     NEXT_PUBLIC_SITE_URL = "https://parrot-web.fly.dev"
+    BACKEND_ORIGIN = "https://parrot-backend.fly.dev"
 
 [env]
   NODE_ENV = "production"
+  # The site proxies /api and /media to the backend, so the sign-in cookie is first-party.
+  BACKEND_ORIGIN = "https://parrot-backend.fly.dev"
   PUBLIC_WEB_URL = "https://parrot-web.fly.dev"
 
 [http_service]

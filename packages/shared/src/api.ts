@@ -85,7 +85,8 @@ export type UnlockErrorCode =
   | 'PAYMENT_FAILED'
   | 'NOT_PUBLISHED'
   | 'NOT_FOUND'
-  | 'RATE_LIMITED';
+  | 'RATE_LIMITED'
+  | 'SIGN_IN_REQUIRED';
 
 export interface ApiErrorDto {
   readonly ok: false;

@@ -55,6 +55,32 @@ const envSchema = z.object({
    * apply. For demos and testing; off by default.
    */
   FORCE_DUB: boolish,
+
+  // --- Accounts: sign-in and per-user wallets -------------------------------
+  /** SQLite file for users and sessions. On Fly this lives on the /data volume. */
+  USERS_DB_PATH: z.string().default('./data/users.db'),
+  /**
+   * 32 bytes as 64 hex characters. Encrypts every user's wallet key at rest.
+   * Accounts are switched off without it. Generate: `openssl rand -hex 32`.
+   * Losing it makes every user wallet unrecoverable, so back it up.
+   */
+  WALLET_ENCRYPTION_KEY: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v.trim() === '' ? undefined : v.trim()))
+    .refine((v) => v === undefined || /^[0-9a-fA-F]{64}$/.test(v), {
+      message: 'WALLET_ENCRYPTION_KEY must be 64 hex characters (openssl rand -hex 32)',
+    }),
+  SESSION_TTL_DAYS: z.coerce.number().int().positive().max(365).default(30),
+  GOOGLE_CLIENT_ID: optionalString,
+  GOOGLE_CLIENT_SECRET: optionalString,
+  /** Sends the sign-in link. Without it, links are only logged outside production. */
+  RESEND_API_KEY: optionalString,
+  EMAIL_FROM: optionalString,
+  /** Testnet USDC sent to a new user's wallet at signup, once, in USD ("1.00"). */
+  SIGNUP_BONUS_USD: z.string().default('1.00'),
+  /** At most this many new wallets are funded per UTC day, so the Treasury is bounded. */
+  SIGNUP_DAILY_LIMIT: z.coerce.number().int().nonnegative().default(25),
   /**
    * In production the /api/demo/* write routes are closed unless this is set,
    * and then require it in an `x-admin-token` header. Unset in development.

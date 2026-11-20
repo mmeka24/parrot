@@ -4,6 +4,7 @@ import { getSystemStatus } from '@/lib/api';
 import { localCopy } from '@/lib/local-copy';
 import { siteUrl } from '@/lib/site';
 import { ServiceWorker, SimulatedBanner, SiteFooter, SiteHeader } from '@/components/SiteChrome';
+import { AccountProvider } from '@/lib/account';
 import './globals.css';
 
 export const dynamic = 'force-dynamic';
@@ -46,13 +47,15 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <a className="skip-link" href="#main">
           {localCopy.nav.skipToContent}
         </a>
-        <SimulatedBanner items={status.mocked} />
-        <SiteHeader status={status} />
-        <main id="main" className="shell" style={{ paddingBlock: '1.75rem 3rem' }}>
-          {children}
-        </main>
-        <SiteFooter />
-        <ServiceWorker />
+        <AccountProvider>
+          <SimulatedBanner items={status.mocked} />
+          <SiteHeader status={status} />
+          <main id="main" className="shell" style={{ paddingBlock: '1.75rem 3rem' }}>
+            {children}
+          </main>
+          <SiteFooter />
+          <ServiceWorker />
+        </AccountProvider>
       </body>
     </html>
   );

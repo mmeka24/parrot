@@ -8,8 +8,11 @@ ARG APP=web
 # they are build arguments, not runtime environment.
 ARG NEXT_PUBLIC_BACKEND_URL
 ARG NEXT_PUBLIC_SITE_URL
+# Read by next.config.ts at build time: where /api and /media are proxied to.
+ARG BACKEND_ORIGIN
 ENV NEXT_PUBLIC_BACKEND_URL=$NEXT_PUBLIC_BACKEND_URL \
     NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL \
+    BACKEND_ORIGIN=$BACKEND_ORIGIN \
     NEXT_TELEMETRY_DISABLED=1
 
 WORKDIR /app

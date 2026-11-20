@@ -10,6 +10,7 @@ primary_region = "sjc"
   NODE_ENV = "production"
   BACKEND_PORT = "8080"
   MEDIA_STORAGE_DIR = "/data/media"
+  USERS_DB_PATH = "/data/users.db"
 
 [mounts]
   source = "parrot_data"

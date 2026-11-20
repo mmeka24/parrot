@@ -26,3 +26,10 @@ test-results/
 
 # local env (never commit)
 .env
+
+# user accounts database (wallet keys, encrypted) - never commit
+apps/backend/data/
+data/
+*.db
+*.db-wal
+*.db-shm
