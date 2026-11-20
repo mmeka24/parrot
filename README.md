@@ -21,15 +21,15 @@ than a smaller honest one.
 
 | Subsystem | Status in this repo |
 | --- | --- |
-| Money maths, split, ledger, EV model, state machine | **Real.** 428 tests. |
+| Money maths, split, ledger, EV model, state machine | **Real.** 455 tests across the repo. |
 | Decision loop, competing agent personas, learning loop | **Real.** Runs on every job. |
 | x402 / Circle Gateway integration | **Written against the real SDK, never run against Circle.** No funded keys. |
 | On-chain USDC settlement on Arc | **Written and typechecked, never broadcast.** No funded keys. |
-| ElevenLabs dubbing + Scribe STT QC | **Written against the real API, never called.** No API key. |
-| QuickNode Streams webhook + filter | **Real, unit-tested offline.** Never received a live delivery. |
+| ElevenLabs dubbing + Scribe STT QC | **Real, run live once (2026-11-19).** A 12.5s English clip was dubbed to Spanish in 9s; QC heard Spanish at 98.6% and passed it. That first live run found two bugs the mocks hid, both fixed and now tested: uploads were labelled `application/octet-stream` (rejected with HTTP 400), and speech-to-text answers `spa` where jobs say `es`, so every correct dub failed QC. |
+| QuickNode Streams webhook + filter | **Unit-tested offline, not connected.** Nothing in the running server creates the stream or mounts the webhook yet, and it has never received a live delivery. |
 | X API | **Written, never called.** The demo runs on Chirp, a local stand-in for X. |
-| Browser extension | **Real, run end to end against Chirp** in Chromium. Never run on x.com. |
-| Grok intent parsing | **Written, never called.** A regex fallback is what actually runs. |
+| Browser extension | **Real, run end to end against Chirp** in Chromium, including through the public deploy. **On x.com: built, never run on the live site** (x.com refuses automated browsers, so it cannot be tested from here). |
+| Grok intent parsing | **Real, live.** Verified with a request the regex cannot read: "the language they speak in Brazil" came back as Portuguese, and the deployed bot dubbed it. The regex remains the fallback if a Grok call fails. |
 | ffmpeg audio checks | **Not run.** ffmpeg is absent, so the check reports `skipped`, never `passed`. |
 
 With an empty `.env` the whole flow still runs end to end, and every simulated subsystem
@@ -347,17 +347,42 @@ extension's only server calls are two reads (`/api/extension/config`,
 anything read out of a web page can be forged by the person looking at it.
 
 **How it finds posts.** Chirp emits x.com's own `data-testid` hooks
-(`tweet`, `User-Name`, `tweetTextarea_0`, …), listed once in
-`packages/shared/src/x-dom.ts`, and the content script reads only those. The same
-script is meant to run on x.com unchanged. **That has not been tried.** The
-manifest only matches `localhost`, x.com changes those hooks without notice, and
-the backend's mock adapter would not recognise real post ids anyway.
+(`tweet`, `User-Name`, `videoPlayer`, …), listed once in
+`packages/shared/src/x-dom.ts`, and the content script reads only those.
+
+**On real x.com** there is no X API (it bills per call) and no bot reading
+replies, and a reply would publicly tag whoever owns the bot's handle there. So
+the extension works differently on x.com:
+
+- It reads each **video** post off the page (author, likes, replies, reposts,
+  views, length) and sends that to Parrot (`POST /api/extension/observe`).
+- "Dub this" asks Parrot directly (`POST /api/extension/request`) instead of
+  posting a reply. Nothing is ever posted to X.
+- Every video post shows a Parrot strip ("No dub yet" until someone asks), so it
+  is visible that the extension is running.
+
+**Those numbers are unverified**: the person viewing a page can edit it. They are
+marked `source: 'page'`, the strip says so, and two things bound what a forged
+page can cost: each agent's spending caps ($2 per job, $10 per day) and the EV
+margin every request still has to clear. The author check (only the poster can
+ask) also rests on what the page says.
+
+**This has never run on the live site.** If the strip does not appear, open
+DevTools on x.com and look for the `[Parrot]` line in the console: it says how
+many posts and videos it found, which account it thinks is signed in, and whether
+the server is reachable. A renamed hook is a one-line fix in `x-dom.ts`.
 
 **Seeded posts vs. uploads.** The four seeded posts have engagement numbers but no
 footage, and they are always dubbed with the stand-in audio, even when an
 ElevenLabs key is set. A video **uploaded through Chirp's composer** is a real
 file: with `ELEVENLABS_API_KEY` set, the backend sends those bytes to ElevenLabs
-and the dub is real (and costs credits).
+and the dub is real (and costs credits). A fresh upload has no likes or views, so
+the agents may well decline it - that is the economics working, not a fault.
+
+**Known gap:** in the pipeline, the QC duration check compares the source length
+with itself (the dub's real length, which ElevenLabs reports, is not passed
+through yet), so `duration_match` cannot fail there. The live test above checked
+it against the real length directly.
 
 ## Demo
 

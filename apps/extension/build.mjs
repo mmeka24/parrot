@@ -37,6 +37,8 @@ const options = {
   target: 'chrome120',
   logLevel: 'info',
   legalComments: 'none',
+  // PARROT_SERVER=https://... bakes in the server a shared build talks to.
+  define: { __PARROT_SERVER__: JSON.stringify(process.env.PARROT_SERVER ?? '') },
 };
 
 if (watch) {

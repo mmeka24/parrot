@@ -419,6 +419,46 @@ export interface ExtensionPostStatusDto {
   readonly pending: boolean;
   /** Parrot's most recent answer under this post, in its own words. */
   readonly lastReply: { readonly text: string; readonly at: string } | null;
+  /**
+   * Where Parrot's picture of this post came from: its own records ('server'),
+   * or numbers read off a real x.com page that it cannot check ('page').
+   */
+  readonly source: 'server' | 'page';
+}
+
+/**
+ * A real x.com post as the extension read it. On x.com there is no X API, so
+ * this is the only source - unverified, and labelled so wherever it is shown.
+ */
+export interface ExtensionObservedPostDto {
+  readonly postId: string;
+  readonly authorHandle: string;
+  readonly authorDisplayName: string;
+  readonly text: string;
+  readonly metrics: {
+    readonly likes: number;
+    readonly replies: number;
+    readonly reposts: number;
+    readonly views: number | null;
+  };
+  readonly durationS: number | null;
+  readonly createdAt: string | null;
+}
+
+export interface ExtensionObserveRequestDto {
+  readonly posts: readonly ExtensionObservedPostDto[];
+}
+
+/** POST /api/extension/request - x.com only, where no bot reads replies. */
+export interface ExtensionDubRequestDto {
+  readonly postId: string;
+  readonly languageCode: string;
+  /** The signed-in handle, as the page shows it. */
+  readonly requesterHandle: string;
+}
+
+export interface ExtensionDubAcceptedDto {
+  readonly ok: true;
 }
 
 export interface ExtensionStatusResponseDto {

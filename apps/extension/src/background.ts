@@ -22,14 +22,25 @@ async function server(): Promise<string> {
   return DEFAULT_SERVER;
 }
 
-async function getJson<T>(path: string): Promise<T> {
+async function getJson<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${await server()}${path}`, {
     // Parrot identifies a viewer by cookie; the extension has no business
     // creating or reading one.
     credentials: 'omit',
     cache: 'no-store',
+    ...(body === undefined
+      ? {}
+      : {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
   });
-  if (!res.ok) throw new Error(`server answered ${res.status}`);
+  if (!res.ok) {
+    // Parrot's errors are already plain language; pass the detail through.
+    const error = (await res.json().catch(() => null)) as { detail?: string } | null;
+    throw new Error(error?.detail ?? `server answered ${res.status}`);
+  }
   return (await res.json()) as T;
 }
 
@@ -46,6 +57,10 @@ async function handle(request: Request): Promise<unknown> {
         `/api/extension/posts?ids=${encodeURIComponent(ids.join(','))}`,
       );
     }
+    case 'observe':
+      return getJson('/api/extension/observe', { posts: request.posts.slice(0, MAX_IDS) });
+    case 'request':
+      return getJson('/api/extension/request', request.body);
     case 'getServer':
       return server();
     case 'setServer': {

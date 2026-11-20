@@ -165,6 +165,32 @@ describe('QcService - language_detect', () => {
     );
   });
 
+  it('passes on the three-letter code the real service sends ("spa", not "es")', async () => {
+    // Exactly what ElevenLabs returned for a real Spanish dub on 2026-11-19.
+    // The earlier tests faked "es", which is why a correct dub once failed QC.
+    sttEnv(true);
+    const fetchImpl = sttFetch({
+      language_code: 'spa',
+      language_probability: 0.9858934879302979,
+      text: 'esto es lo que nadie te dice sobre cocinar con poco dinero',
+    });
+    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing });
+    const check = await svc.checkLanguage(input);
+
+    expect(check.status).toBe('passed');
+    expect(check.measured).toMatchObject({ detected: 'es', expected: 'es' });
+  });
+
+  it('still fails a wrong language reported as a three-letter code', async () => {
+    sttEnv(true);
+    const fetchImpl = sttFetch({ language_code: 'fra', language_probability: 0.99, text: 'bonjour' });
+    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing });
+    const check = await svc.checkLanguage(input);
+
+    expect(check.status).toBe('failed');
+    expect(check.detail).toContain('French');
+  });
+
   it('fails when the dub is in the wrong language', async () => {
     sttEnv(true);
     const fetchImpl = sttFetch({

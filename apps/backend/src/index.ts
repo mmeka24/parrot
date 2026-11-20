@@ -35,6 +35,7 @@ import { createApp } from './api/routes.js';
 import { createXApiAdapter } from './bot/x-adapter.js';
 import type { XAdapter } from './bot/x-adapter.js';
 import { mediaUrl } from './api/mappers.js';
+import type { ObservedPost } from './store/types.js';
 import { parseStatusHref } from '@parrot/shared';
 
 /**
@@ -185,6 +186,8 @@ async function main(): Promise<void> {
   const resolveSource = (sourceUrl: string): SourceMedia => {
     if (!adapter.isMock) return { kind: 'remote' };
     const postId = parseStatusHref(sourceUrl)?.postId;
+    // A real x.com post seen through the extension: the provider fetches it.
+    if (postId && store.observedPosts.has(postId)) return { kind: 'remote' };
     const videoPath = postId ? store.botPosts.get(postId)?.videoPath : null;
     return videoPath ? { kind: 'file', path: videoPath } : { kind: 'none' };
   };
@@ -343,6 +346,79 @@ async function main(): Promise<void> {
     return job.id;
   }
 
+  /**
+   * A dub request for a real x.com post, from the extension. The same intake,
+   * auction, dub and QC as a mention - only the source differs: the post's
+   * numbers were read off a page (unverified), and the answer goes back to the
+   * extension rather than into a reply on X, which Parrot cannot post to.
+   */
+  async function dubObservedPost(post: ObservedPost, targetLang: string): Promise<string> {
+    // No X user id without the API; the handle is the stable key we have.
+    const xUserId = `x-handle-${post.authorHandle}`;
+    const creator =
+      store.findCreatorByXUserId(xUserId) ??
+      (() => {
+        const account = store.createAccount({
+          kind: 'creator',
+          label: `@${post.authorHandle}`,
+          email: null,
+          walletAddress: null,
+        });
+        return store.createCreator({
+          xUserId,
+          handle: post.authorHandle,
+          displayName: post.authorDisplayName || post.authorHandle,
+          accountId: account.id,
+          // Not on the post's page. Zero is the honest value: it adds nothing
+          // to the estimate rather than inventing an audience.
+          followers: 0,
+          claimed: false,
+        });
+      })();
+
+    const intake = pipeline.intake({
+      creatorId: creator.id,
+      sourceUrl: `https://x.com/${post.authorHandle}/status/${post.postId}`,
+      sourcePostId: post.postId,
+      requestMentionId: null,
+      targetLang,
+      durationS: post.durationS ?? 30,
+      category: categorise(post.text),
+      signals: {
+        likes: post.metrics.likes,
+        replies: post.metrics.replies,
+        reposts: post.metrics.reposts,
+        quotes: 0,
+        sourceViews: post.metrics.views ?? 0,
+        authorFollowers: 0,
+        ageHours: post.createdAt
+          ? Math.max(0, (Date.now() - post.createdAt.getTime()) / 3_600_000)
+          : 0,
+      },
+    });
+
+    if (intake.kind === 'duplicate') {
+      return composeReply('duplicate', {
+        language: languageName(intake.job.targetLang),
+        link: bot.link(intake.job.id),
+      });
+    }
+    if (intake.kind === 'rejected') {
+      return composeReply('declined', { reason: intake.reason });
+    }
+
+    const job = await pipeline.run(intake.job.id);
+    if (job.state === 'DECLINED') {
+      return composeReply('declined', { reason: job.declineReason ?? 'LOW_EV' });
+    }
+    if (job.state === 'REJECTED_BY_QC') return composeReply('qcFailed');
+    if (job.state === 'FAILED') return composeReply('error');
+    return composeReply('published', {
+      language: languageName(job.targetLang),
+      link: bot.link(job.id),
+    });
+  }
+
   const feedStatus = (): FeedStatusDto => ({
     live: hub.clientCount > 0,
     source: config.capabilities.quicknodeStream ? 'quicknode_stream' : 'simulated',
@@ -403,7 +479,7 @@ async function main(): Promise<void> {
       enabled: adapter.isMock,
       processMentionById: processMention,
     },
-    extension: { store, adapter, botHandle: config.env.X_BOT_HANDLE },
+    extension: { store, adapter, botHandle: config.env.X_BOT_HANDLE, dubObservedPost },
   });
 
   const port = config.env.BACKEND_PORT;

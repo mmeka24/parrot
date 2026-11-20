@@ -21,6 +21,7 @@ let base: string;
 let store: Store;
 let mockX: MockXAdapter;
 let processed: string[];
+let dubbed: string[] = [];
 
 async function start(enabled = true): Promise<void> {
   process.env.DATABASE_URL = 'postgres://localhost/parrot_test';
@@ -33,6 +34,7 @@ async function start(enabled = true): Promise<void> {
   // stamped with the real time, which is what "pending" is measured against.
   mockX.useWallClock();
   processed = [];
+  dubbed = [];
 
   const app = express();
   app.use(express.json());
@@ -45,7 +47,15 @@ async function start(enabled = true): Promise<void> {
       return null;
     },
   });
-  registerExtensionRoutes(app, { store, adapter: mockX, botHandle: 'parrot' });
+  registerExtensionRoutes(app, {
+    store,
+    adapter: mockX,
+    botHandle: 'parrot',
+    dubObservedPost: async (post, lang) => {
+      dubbed.push(`${post.postId}:${lang}`);
+      return `Your ${lang} dub is live.`;
+    },
+  });
 
   server = await new Promise<Server>((resolve) => {
     const s = app.listen(0, () => resolve(s));
@@ -168,5 +178,97 @@ describe('what the extension reads', () => {
     );
     expect(body.languages.map((l) => l.code)).not.toContain('en');
     expect(body.creatorPercent).toBe(60);
+  });
+});
+
+describe('real x.com posts, read off the page', () => {
+  beforeEach(() => start());
+
+  const seen = {
+    postId: '1860042215577',
+    authorHandle: 'Maya_Builds',
+    authorDisplayName: 'Maya',
+    text: 'shipping a parser live',
+    metrics: { likes: 900, replies: 80, reposts: 120, views: 15000 },
+    durationS: 42,
+    createdAt: new Date().toISOString(),
+  };
+
+  it('is known only after the page has reported it, and is marked as page-sourced', async () => {
+    let status = (await get<ExtensionStatusResponseDto>(`/api/extension/posts?ids=${seen.postId}`)).body;
+    expect(status.posts[0]?.known).toBe(false);
+
+    expect((await post('/api/extension/observe', { posts: [seen] })).status).toBe(200);
+    status = (await get<ExtensionStatusResponseDto>(`/api/extension/posts?ids=${seen.postId}`)).body;
+    expect(status.posts[0]).toMatchObject({
+      known: true,
+      hasVideo: true,
+      authorHandle: 'maya_builds',
+      source: 'page',
+    });
+  });
+
+  it('drops malformed posts one by one, keeping the good ones in the same batch', async () => {
+    const bad = { ...seen, postId: '111', metrics: { ...seen.metrics, likes: -5 } };
+    const notSnowflake = { ...seen, postId: 'mock-post-1' };
+    const res = await post<{ stored: number; rejected: number }>('/api/extension/observe', {
+      posts: [bad, notSnowflake, seen],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ stored: 1, rejected: 2 });
+    expect([...store.observedPosts.keys()]).toEqual([seen.postId]);
+    // Not even a list: the request itself is malformed.
+    expect((await post('/api/extension/observe', { posts: 'nope' })).status).toBe(400);
+  });
+
+  it('only takes a request from the handle that posted the video', async () => {
+    await post('/api/extension/observe', { posts: [seen] });
+    const stranger = await post('/api/extension/request', {
+      postId: seen.postId,
+      languageCode: 'es',
+      requesterHandle: 'someone_else',
+    });
+    expect(stranger.status).toBe(403);
+    expect(dubbed).toEqual([]);
+  });
+
+  it('refuses English, unknown posts, and posts with no known length', async () => {
+    await post('/api/extension/observe', { posts: [{ ...seen, durationS: null }] });
+    const body = { postId: seen.postId, languageCode: 'es', requesterHandle: 'maya_builds' };
+    expect((await post('/api/extension/request', body)).status).toBe(400);
+    expect((await post('/api/extension/request', { ...body, postId: '999' })).status).toBe(404);
+    await post('/api/extension/observe', { posts: [seen] });
+    expect((await post('/api/extension/request', { ...body, languageCode: 'en' })).status).toBe(400);
+  });
+
+  it('runs the request, shows it pending, then shows the answer', async () => {
+    await post('/api/extension/observe', { posts: [seen] });
+    const res = await post('/api/extension/request', {
+      postId: seen.postId,
+      languageCode: 'fr',
+      requesterHandle: '@Maya_Builds',
+    });
+    expect(res.status).toBe(202);
+    expect(dubbed).toEqual([`${seen.postId}:fr`]);
+
+    // The stub resolves on the next tick; give it one.
+    await new Promise((r) => setTimeout(r, 20));
+    const status = (await get<ExtensionStatusResponseDto>(`/api/extension/posts?ids=${seen.postId}`)).body;
+    expect(status.posts[0]?.pending).toBe(false);
+    expect(status.posts[0]?.lastReply?.text).toBe('Your fr dub is live.');
+  });
+
+  it('keeps an answer and a known length when the post is read again', async () => {
+    await post('/api/extension/observe', { posts: [seen] });
+    await post('/api/extension/request', {
+      postId: seen.postId,
+      languageCode: 'fr',
+      requesterHandle: 'maya_builds',
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    await post('/api/extension/observe', { posts: [{ ...seen, durationS: null }] });
+    const stored = store.observedPosts.get(seen.postId);
+    expect(stored?.durationS).toBe(42);
+    expect(stored?.lastAnswer?.text).toBe('Your fr dub is live.');
   });
 });

@@ -19,7 +19,7 @@ async function render(): Promise<void> {
   byId('tagline').textContent = t.tagline;
   byId('server-label').textContent = t.popupServer;
   byId('save').textContent = t.popupSave;
-  byId('active-on').textContent = `${t.popupActiveOn}: localhost`;
+  byId('active-on').textContent = `${t.popupActiveOn}: x.com, localhost`;
 
   const server = await ask({ type: 'getServer' });
   if (server.ok) byId<HTMLInputElement>('server').value = server.data;

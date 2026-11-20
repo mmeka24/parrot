@@ -130,6 +130,38 @@ export const SUPPORTED_LANGUAGES: readonly LanguageSpec[] = [
 
 export const SUPPORTED_LANGUAGE_CODES = SUPPORTED_LANGUAGES.map((l) => l.code);
 
+/**
+ * ISO 639-3 / 639-2 codes for the supported languages, mapped to the 639-1
+ * codes Parrot uses everywhere. Speech-to-text reports the three-letter form
+ * ("spa"), dubbing takes the two-letter one ("es") - found by the first real
+ * end-to-end dub, which a correct Spanish dub failed QC over. Both
+ * bibliographic and terminological 639-2 forms are listed (fre/fra, ger/deu).
+ */
+const THREE_TO_TWO: Record<string, string> = {
+  spa: 'es',
+  por: 'pt',
+  hin: 'hi',
+  fra: 'fr',
+  fre: 'fr',
+  deu: 'de',
+  ger: 'de',
+  jpn: 'ja',
+  kor: 'ko',
+  ara: 'ar',
+  ind: 'id',
+  eng: 'en',
+};
+
+/**
+ * One language code in Parrot's form: lower-case ISO 639-1, region dropped.
+ * "spa" -> "es", "es-MX" -> "es", "pt_BR" -> "pt". Unknown codes pass through
+ * lower-cased, so they still compare unequal to anything supported.
+ */
+export function normalizeLanguageCode(code: string): string {
+  const base = code.trim().toLowerCase().split(/[-_]/)[0] ?? '';
+  return THREE_TO_TWO[base] ?? base;
+}
+
 export function languageByCode(code: string): LanguageSpec | undefined {
   return SUPPORTED_LANGUAGES.find((l) => l.code === code.toLowerCase());
 }

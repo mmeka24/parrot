@@ -34,6 +34,7 @@ import type {
   LedgerEntry,
   LedgerKind,
   PredictionRecord,
+  ObservedPost,
   ProcessedMention,
   Settlement,
   Unlock,
@@ -53,6 +54,8 @@ export class Store {
   readonly chainTransfers = new Map<string, ChainTransfer>();
   readonly botPosts = new Map<string, BotPost>();
   readonly processedMentions = new Map<string, ProcessedMention>();
+  /** Real x.com posts, as the extension read them. Unverified; see ObservedPost. */
+  readonly observedPosts = new Map<string, ObservedPost>();
 
   // -------------------------------------------------------------------------
   // Accounts and balances
@@ -491,6 +494,7 @@ export class Store {
     this.chainTransfers.clear();
     this.botPosts.clear();
     this.processedMentions.clear();
+    this.observedPosts.clear();
   }
 }
 

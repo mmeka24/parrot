@@ -112,13 +112,22 @@ export function createApp(deps: RouteDeps): Express {
     // the configured port (a busy port bumps it). Outside production we accept
     // any localhost origin, because pinning one port silently breaks the live
     // ticker with a CORS error that looks like a backend outage.
-    const configured = getConfig().env.PUBLIC_WEB_URL;
+    const { PUBLIC_WEB_URL, PUBLIC_XCLONE_URL } = getConfig().env;
+    const configured = PUBLIC_WEB_URL.replace(/\/$/, '');
     const origin = req.headers.origin;
     const allowLocalhost =
       getConfig().env.NODE_ENV !== 'production' &&
       typeof origin === 'string' &&
       /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
-    res.setHeader('Access-Control-Allow-Origin', allowLocalhost ? origin : configured);
+    // The two public front ends: the web app, and the X stand-in, which calls
+    // this server straight from the browser.
+    const allowListed =
+      typeof origin === 'string' &&
+      [configured, PUBLIC_XCLONE_URL.replace(/\/$/, '')].includes(origin);
+    res.setHeader(
+      'Access-Control-Allow-Origin',
+      allowLocalhost || allowListed ? (origin as string) : configured,
+    );
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Headers', 'content-type');
