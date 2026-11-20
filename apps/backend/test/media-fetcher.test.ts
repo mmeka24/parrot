@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { resolve } from 'node:path';
 import { MAX_SOURCE_DURATION_S } from '@parrot/shared';
 import {
   MediaFetchError,
@@ -55,7 +56,7 @@ describe('MediaFetcher', () => {
   it('downloads to xsrc_<postId>.mp4, enforcing length and size caps, with no shell', async () => {
     const { fetcher, calls } = make({ sizes: [null, 5_000] });
     const path = await fetcher.fetch(URL_OK);
-    expect(path).toBe('/tmp/parrot-test-media/xsrc_1234567890123456789.mp4');
+    expect(path).toBe(resolve('/tmp/parrot-test-media', 'xsrc_1234567890123456789.mp4'));
     const args = calls[0] as string[];
     expect(args).toContain('--no-playlist');
     expect(args[args.indexOf('--match-filter') + 1]).toBe(`duration<=${MAX_SOURCE_DURATION_S}`);

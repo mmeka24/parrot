@@ -335,17 +335,17 @@ describe('persona differences', () => {
       optimismPpm: 1_350_000,
     });
 
-    // A middling post: 150k views. A 30s dub costs $0.25 and each dub viewer
+    // A popular post: 600k views. A 30s dub costs $0.25 and each dub viewer
     // is worth $0.0007 (12.5% unlock x $0.02 x 40% x 0.7), so:
-    //   cautious, low case:  ~61 viewers   -> about -$0.21, short of its $0.60 margin
-    //   bold, high case:    ~1,360 viewers -> about +$0.70, clears its $0.02 margin
+    //   cautious, low case:   ~97 viewers  -> about -$0.18, short of its $0.60 margin
+    //   bold, high case:    ~1,210 viewers -> about +$0.60, clears its $0.02 margin
     const job = workedExampleJob(store, {
       signals: {
-        likes: 2_600,
-        replies: 90,
-        reposts: 380,
-        quotes: 30,
-        sourceViews: 150_000,
+        likes: 10_400,
+        replies: 360,
+        reposts: 1_520,
+        quotes: 120,
+        sourceViews: 600_000,
         authorFollowers: 20_000,
         ageHours: 3,
       },
@@ -443,5 +443,68 @@ describe('the auction', () => {
     const outcome = service.runAuction(workedExampleJob(store));
     expect(outcome.bids).toHaveLength(0);
     expect(outcome.winner).toBeNull();
+  });
+});
+
+describe('the sealed-bid auction (second price, on the agent share)', () => {
+  it('the lowest bid wins and is paid the runner-up bid, so the creator keeps more', () => {
+    const { store, service } = makeStore();
+    addAgent(store, { name: 'Lean', minMargin: parseUsd('0.01') });
+    addAgent(store, { name: 'Mid', minMargin: parseUsd('0.05') });
+    addAgent(store, { name: 'Greedy', minMargin: parseUsd('0.10') });
+    const job = workedExampleJob(store);
+
+    const outcome = service.runAuction(job);
+    const auction = outcome.auction!;
+    const [first, second] = auction.bids;
+
+    expect(outcome.winner?.name).toBe('Lean');
+    expect(first!.bidBps).toBeLessThanOrEqual(second!.bidBps);
+    expect(auction.clearingBps).toBe(second!.bidBps);
+    const saved = store.getJob(job.id)!;
+    expect(saved.splitAgentBps).toBe(auction.clearingBps);
+    expect(saved.splitAgentBps + saved.splitCreatorBps).toBe(10_000);
+    // Better than the old first-come rule, which always paid the agent 40%.
+    expect(saved.splitCreatorBps).toBeGreaterThan(DEFAULT_SPLIT_CREATOR_BPS);
+  });
+
+  it('the winner still clears its own margin at the price it is paid', () => {
+    const { store, service } = makeStore();
+    addAgent(store, { name: 'A', minMargin: parseUsd('0.05') });
+    addAgent(store, { name: 'B', minMargin: parseUsd('0.20') });
+    const job = workedExampleJob(store);
+    const outcome = service.runAuction(job);
+    const won = service.evaluate(outcome.winner!, store.getJob(job.id)!);
+    expect(BigInt(won.decision.result.evMicros)).toBeGreaterThan(BigInt(won.decision.inputs.minMarginMicros));
+  });
+
+  it('a lone bidder takes the reserve share, exactly as before', () => {
+    const { store, service } = makeStore();
+    addAgent(store, { name: 'Solo', minMargin: parseUsd('0.01') });
+    const job = workedExampleJob(store);
+    const outcome = service.runAuction(job);
+    expect(outcome.auction?.clearingBps).toBe(DEFAULT_SPLIT_AGENT_BPS);
+    expect(outcome.winningDecision?.rationale).toMatch(/only bid/);
+  });
+
+  it('with the real personas, the winner does not depend on evaluation order', () => {
+    const winners = new Set<string>();
+    for (let i = 0; i < 25; i++) {
+      const { store, service } = makeStore();
+      for (const p of AGENT_PERSONAS) {
+        addAgent(store, {
+          name: p.name,
+          minMargin: parseUsd(p.minMarginUsd),
+          floor: parseUsd(p.floorUsd),
+          maxExposurePerJob: parseUsd(p.maxExposureUsd),
+          dailyCap: parseUsd(p.dailyCapUsd),
+          languageFocus: p.languageFocus,
+          optimismPpm: p.optimismPpm,
+        });
+      }
+      winners.add(service.runAuction(workedExampleJob(store)).winner?.name ?? 'none');
+    }
+    // The old rule picked whichever approving agent was shuffled first.
+    expect(winners.size).toBe(1);
   });
 });

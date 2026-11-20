@@ -130,19 +130,29 @@ export const X_AD_REACH_MILLIONS = 433;
 /**
  * Step 3: how well an English post reaches a language's market, relative to
  * that market's share of X. 1.0 would mean the post reached every market in
- * proportion to its size; English posts mostly circulate among English
- * speakers, so it is well below that. ASSUMPTION.
+ * proportion to its size. English posts mostly circulate among English
+ * speakers, and the big non-English X markets have low-to-moderate English
+ * proficiency (EF English Proficiency Index: Mexico, Brazil, Japan and
+ * Indonesia all rank "low" or "moderate"), so a third of the proportional
+ * share is the likely case. ASSUMPTION - measured per language once the
+ * learning loop has data. (Was 0.25 / 0.5 / 0.75, which assumed half of every
+ * market sees a typical English post.)
  */
-export const MARKET_REACH: FunnelRange = { low: 0.25, likely: 0.5, high: 0.75 };
+export const MARKET_REACH: FunnelRange = { low: 0.2, likely: 0.35, high: 0.5 };
 
 /**
  * Step 4: of the viewers in that language market, how many open the dub.
- * ASSUMPTION. Upper sanity bound: YouTube reports creators with dubbed audio
+ * ASSUMPTION. Here the dub is a link in a reply, so this is a link
+ * click-through: organic link posts on X typically see ~1-3% of impressions
+ * click, and only part of a post's audience ever opens its replies. A dub in
+ * the viewer's own language should beat a generic link, so 2% is the likely
+ * case and 5% the optimistic one. (Was 2% / 5% / 15%; 15% would beat most paid
+ * ads.) Upper sanity bound: YouTube reports creators with dubbed audio
  * tracks get over 25% of watch time from those tracks - but there switching is
- * one tap inside the player, while here it is a reply link, so we sit well
+ * one tap inside the player, while here it is a reply link, so we sit far
  * below. https://blog.youtube/news-and-events/multi-language-audio-mrbeast-interview/
  */
-export const DUB_UPTAKE: FunnelRange = { low: 0.02, likely: 0.05, high: 0.15 };
+export const DUB_UPTAKE: FunnelRange = { low: 0.01, likely: 0.02, high: 0.05 };
 
 /** Smoothing factor for the learning loop. */
 export const LEARNING_ALPHA: Ppm = ppm(300_000); // 0.3

@@ -66,6 +66,12 @@ const envSchema = z.object({
   AGENT_FINCH_PRIVATE_KEY: optionalKeySchema,
   VIEWER_POOL_PRIVATE_KEY: optionalKeySchema,
   COST_SINK_ADDRESS: optionalString,
+  /**
+   * ParrotSplitter contract (npm run deploy:splitter). When set, auctions are
+   * recorded on-chain and each unlock is split by the contract straight to the
+   * creator and the winning agent.
+   */
+  SPLITTER_ADDRESS: optionalString,
 
   GATEWAY_FACILITATOR_URL: z.string().url().default(GATEWAY_FACILITATOR_URL_TESTNET),
   CIRCLE_FACILITATOR_URL: z.string().url().default(CIRCLE_FACILITATOR_URL),

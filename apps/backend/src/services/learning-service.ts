@@ -26,6 +26,7 @@ import {
   REAL_LEARNING_DELAY_MS,
   type BucketStats,
 } from '@parrot/shared';
+import { updateCalibration } from './decision-service.js';
 import type { Store } from '../store/store.js';
 import type { Job } from '../store/types.js';
 import { getConfig } from '../config.js';
@@ -120,6 +121,18 @@ export class LearningService {
       n: updated.n,
       updatedAt: new Date(),
     });
+
+    // Hold the winning agent to its forecast: an agent that over-promised
+    // plans lower next time, so optimism alone cannot keep winning auctions.
+    const agent = job.claimedByAgentId ? this.store.agents.get(job.claimedByAgentId) : undefined;
+    if (agent) {
+      // The recorded forecast already includes the agent's correction, so the
+      // update multiplies onto it rather than starting over.
+      this.store.agents.set(agent.id, {
+        ...agent,
+        calibrationPpm: updateCalibration(agent.calibrationPpm ?? 1_000_000, prediction.predictedViews, actualViews),
+      });
+    }
 
     return {
       jobId,

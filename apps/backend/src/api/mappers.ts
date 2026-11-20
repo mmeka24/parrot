@@ -335,13 +335,13 @@ export function decisionLog(store: Store, limit = 40): DecisionLogEntryDto[] {
       won: payload?.won ?? decision.decision === 'APPROVE',
       claimedByAgentName: payload?.claimedByAgentName ?? null,
       declineReason: decision.declineReason,
-      // An agent that approved but lost the race reasoned its way to "I would
-      // dub this" - which is true, and worth showing - but the log must not
-      // leave a reader thinking it did. The winner's name is appended rather
-      // than the reasoning being rewritten, because the reasoning is real.
+      // An agent that approved but lost the auction reasoned its way to "I
+      // would dub this" - which is true, and worth showing - but the log must
+      // not leave a reader thinking it did. The winner's name is appended
+      // rather than the reasoning being rewritten, because the reasoning is real.
       rationale:
         decision.decision === 'APPROVE' && payload?.won === false && payload?.claimedByAgentName
-          ? `${decision.rationale} (${payload.claimedByAgentName} claimed this one first.)`
+          ? `${decision.rationale} (Outbid: ${payload.claimedByAgentName} won the auction with a lower bid.)`
           : decision.rationale,
       math: {
         predictedViews: Number(decision.inputs.predictedViews ?? 0),

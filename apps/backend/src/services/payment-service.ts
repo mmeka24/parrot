@@ -35,9 +35,10 @@ import {
   type Micros,
 } from '@parrot/shared';
 import type { Store } from '../store/store.js';
-import type { Settlement, Unlock, LedgerKind } from '../store/types.js';
+import type { Job, Settlement, Unlock, LedgerKind } from '../store/types.js';
 import { getConfig } from '../config.js';
 import { transferUsdc, withNonceRetry, type Address, type Hex } from '../chain/client.js';
+import { splitUnlockOnchain } from '../chain/splitter.js';
 
 export class PaymentError extends Error {
   readonly code: string;
@@ -89,11 +90,56 @@ export interface UnlockResult {
   readonly viewerBalance: Micros;
 }
 
+/** Where the ParrotSplitter contract sends a job's unlock payments. */
+export interface SplitterRoute {
+  readonly address: Address;
+  /** Paid to the party's own wallet (true) or to the revenue wallet, settled later (false). */
+  readonly agentDirect: boolean;
+  readonly creatorDirect: boolean;
+}
+
 export class PaymentService {
   constructor(private readonly store: Store) {}
 
   private get config() {
     return getConfig();
+  }
+
+  /**
+   * The wallets the splitter pays for this job. A party without a wallet of its
+   * own is paid via the revenue wallet and settled later, exactly as before.
+   * Null when the splitter is not deployed or on-chain settlement is off.
+   */
+  splitPayees(job: Job): { creator: Address; agent: Address; creatorDirect: boolean; agentDirect: boolean } | null {
+    if (!this.config.env.SPLITTER_ADDRESS || !this.config.capabilities.onchainSettlement) return null;
+    const revenue = [...this.store.accounts.values()].find((a) => a.kind === 'revenue')?.walletAddress ?? null;
+    const agent = job.claimedByAgentId ? this.store.agents.get(job.claimedByAgentId) : undefined;
+    const creatorAccountId = this.store.creators.get(job.creatorId)?.accountId;
+    const agentWallet = agent?.walletAddress ?? null;
+    const creatorWallet = creatorAccountId ? (this.store.getAccount(creatorAccountId)?.walletAddress ?? null) : null;
+    const creator = creatorWallet ?? revenue;
+    const agentTo = agentWallet ?? revenue;
+    if (!creator || !agentTo) return null;
+    return {
+      creator: creator as Address,
+      agent: agentTo as Address,
+      creatorDirect: creatorWallet !== null,
+      agentDirect: agentWallet !== null,
+    };
+  }
+
+  /** The splitter route for an unlock, if this job's auction made it on-chain. */
+  splitterRouteFor(job: Job): SplitterRoute | null {
+    const payees = this.splitPayees(job);
+    const recorded = this.store
+      .eventsForJob(job.id)
+      .some((e) => e.type === 'APPROVED' && e.txHash !== null);
+    if (!payees || !recorded) return null;
+    return {
+      address: this.config.env.SPLITTER_ADDRESS as Address,
+      agentDirect: payees.agentDirect,
+      creatorDirect: payees.creatorDirect,
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -210,9 +256,11 @@ export class PaymentService {
     input: Omit<Parameters<PaymentService['recordUnlock']>[0], 'paymentRef' | 'simulated'> & {
       viewerPoolPrivateKey?: Hex;
       revenueAccountId?: string;
+      /** Set when this job's auction is on the ParrotSplitter contract. */
+      splitter?: SplitterRoute | null;
     },
   ): Promise<UnlockResult> {
-    const { viewerPoolPrivateKey, revenueAccountId, ...unlock } = input;
+    const { viewerPoolPrivateKey, revenueAccountId, splitter, ...unlock } = input;
 
     // Re-watching is free: never charge twice for the same viewer and dub.
     if (this.store.findUnlock(unlock.jobId, unlock.viewerAccountId)) {
@@ -236,6 +284,49 @@ export class PaymentService {
     const balance = this.store.balanceOf(unlock.viewerAccountId);
     if ((balance as bigint) < (unlock.amount as bigint)) {
       throw new InsufficientBalanceError(balance, unlock.amount);
+    }
+
+    // With the splitter deployed and this job's auction recorded on-chain, the
+    // CONTRACT splits the payment straight to the creator and the agent.
+    if (splitter) {
+      let txHash: Hex;
+      try {
+        txHash = await splitUnlockOnchain({
+          payerKey: viewerPoolPrivateKey,
+          splitter: splitter.address,
+          jobId: unlock.jobId,
+          unlockKey: `unlock:${unlock.jobId}:${unlock.viewerAccountId}`,
+          amount: unlock.amount,
+        });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new PaymentError('PAYMENT_FAILED', `on-chain split failed: ${message}`);
+      }
+      const result = this.recordUnlock({ ...unlock, paymentRef: txHash, simulated: false });
+      // A leg the contract paid to the party's own wallet is already settled.
+      // Recording it as a confirmed settlement is what stops the settlement
+      // sweep paying it a second time. A leg routed to the revenue wallet (no
+      // wallet of its own yet) stays owed and is settled as before.
+      const legs = [
+        { direct: splitter.agentDirect, accountId: unlock.agentAccountId, amount: result.agentShare, kind: 'agent_share' as const },
+        { direct: splitter.creatorDirect, accountId: unlock.creatorAccountId, amount: result.creatorShare, kind: 'creator_share' as const },
+      ];
+      for (const leg of legs) {
+        if (!leg.direct || (leg.amount as bigint) <= 0n) continue;
+        this.store.createSettlement({
+          jobId: unlock.jobId,
+          toAccountId: leg.accountId,
+          amount: leg.amount,
+          kind: leg.kind,
+          txHash,
+          idempotencyKey: `split:${txHash}:${leg.kind}`,
+          status: 'confirmed',
+          error: null,
+          simulated: false,
+          confirmedAt: new Date(),
+        });
+      }
+      return result;
     }
 
     const payment = await this.settle({

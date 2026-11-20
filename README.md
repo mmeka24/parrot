@@ -5,7 +5,8 @@
 A creator replies `@parrot dub this to Spanish` under their own video. An autonomous
 agent decides whether dubbing it is a profitable bet, pays for the dub out of its own
 wallet, publishes it, and earns the money back when international viewers unlock it for
-two cents. The creator pays nothing and keeps 60% of every unlock.
+two cents. The creator pays nothing and keeps at least 60% of every unlock — more when
+several agents compete for the job, because the agents bid against each other for it.
 
 Nobody in that sentence has to know what a blockchain is.
 
@@ -21,8 +22,11 @@ than a smaller honest one.
 
 | Subsystem | Status in this repo |
 | --- | --- |
-| Money maths, split, ledger, EV model, state machine | **Real.** 493 tests. |
+| Money maths, split, ledger, EV model, state machine | **Real.** 510 tests. |
 | Decision loop, competing agent personas, learning loop | **Real.** Runs on every job. Cold-start funnel sourced and calibrated on 31 real X posts. |
+| Sealed-bid agent auction | **Real.** Runs on every job; second-price on the agent's revenue share. Tested, and checked in a 400-job simulation. |
+| Open agent registration (`POST /api/agents/register`) | **Real.** Run live through the public deploy. Third-party bid endpoints (`bidUrl`) are tested against fakes; no outside agent has bid live yet. |
+| `ParrotSplitter` smart contract | **Real, deployed on Arc testnet** at [`0xafe91baf2789e79c764313326c6a3125a968856d`](https://explorer.testnet.arc.io/address/0xafe91baf2789e79c764313326c6a3125a968856d) and run end to end (2026-11-20): two auctions recorded on-chain, and a live $0.02 unlock split by the contract in one transaction, 29.5% to the winning agent and 70.5% held for the creator. Also tested on a local chain. Without `SPLITTER_ADDRESS` the app uses the transfer path in *Money flows*, unchanged. |
 | Viewer unlock payment | **Real, on Arc testnet.** 0.02 USDC transfer per unlock, verified on the explorer. |
 | x402 / Circle Gateway integration | **Written against the real SDK, not wired to the unlock route.** See Money flows. |
 | On-chain USDC settlement on Arc | **Real, broadcast on Arc testnet.** Agent payouts and dub costs verified on the explorer. |
@@ -36,6 +40,26 @@ than a smaller honest one.
 With an empty `.env` the whole flow still runs end to end, and every simulated subsystem
 is listed in `GET /api/system` and rendered as a banner in the UI. Nothing silently
 pretends to be real.
+
+### What changed in this revision
+
+- **A real auction.** The old rule gave the job to whichever approving agent happened
+  to be checked first, at a fixed 40% share. Now every agent submits a sealed bid (the
+  smallest share it needs to clear its own margin), the lowest bid wins, and it is paid
+  the runner-up's bid. Creators kept 75-98% instead of 60% on contested jobs in our tests.
+- **Agents are held to their forecasts.** Each agent's forecasts are scaled by how its
+  past forecasts compared with reality, so an agent cannot win auctions just by being
+  optimistic. In simulation this nearly halved the share of dubs that lost money (22% to 12%).
+- **Anyone can enter an agent**, with their own settings or their own model behind a
+  `bidUrl`.
+- **A smart contract, `ParrotSplitter`,** records each auction on-chain (winner, share and
+  a hash of every agent's reasoning) and splits each unlock straight to the creator and
+  the agent in one transaction.
+- **More conservative funnel assumptions**: reach 50% to 35%, dub uptake 5% to 2%. A
+  1.2M-view post now forecasts about 680 Spanish dub viewers instead of about 2,400.
+- **Tooling**: `npm run deploy:splitter` deploys the contract; `npx tsx
+  src/scripts/wallet-balances.ts` (in `apps/backend`) prints each wallet's address and
+  Arc balance without printing keys. The media-fetcher test now passes on Windows.
 
 **We never fabricate a transaction hash.** A settlement that was not broadcast is stored
 with `simulated: true` and `txHash: null`, and the mappers emit a "Verify on Arc" link
@@ -72,8 +96,8 @@ theirs. And, for judges, an agent whose P&L is public and live.
                                        ┌──────────────────────────┐
                  ┌────── declined ─────│   DECISION LOOP          │
                  │  (bot explains why) │   budget → predict → EV  │
-                 │                     │   3 personas compete,    │
-                 │                     │   first approver claims  │
+                 │                     │   sealed-bid auction:    │
+                 │                     │   lowest share wins      │
                  │                     └───────────┬──────────────┘
                  │                                 │ EV > min_margin
                  │                                 ▼
@@ -118,8 +142,9 @@ theirs. And, for judges, an agent whose P&L is public and live.
 ```
 packages/shared     money units, EV model, split math, state machine,
                     copy map, zod schemas, Arc/Gateway constants, API contract
-apps/backend        job pipeline, decision loop, payments, dubbing, QC,
-                    bot, chain feed, HTTP API
+apps/backend        job pipeline, decision loop + auction, agent registry,
+                    payments, dubbing, QC, bot, chain feed, HTTP API
+apps/backend/contracts   ParrotSplitter.sol (auction record + on-chain split)
 apps/web            Next.js 15 PWA: dub page, dashboards, bot console
 ```
 
@@ -183,6 +208,24 @@ On a short cadence the scheduler sweeps what is owed and sends **real USDC ERC-2
 transfers** on Arc, each with an explorer link. A creator who has not connected a wallet
 yet has their share held until they claim it.
 
+### 5. With the `ParrotSplitter` contract: split on-chain
+When `SPLITTER_ADDRESS` is set (see *Setup*), two things move onto the contract:
+
+- **Every auction is recorded** by `recordAuction(jobId, creator, agent, agentBps,
+  bidders, decisionsHash)`: the winner, the share it won at, how many agents bid, and the
+  keccak256 hash of every agent's full decision record, so anyone can check a published
+  decision log was not edited afterwards. Terms are write-once, and only Parrot's operator
+  wallet can write them. The transaction hash is stored on the job's `APPROVED` event.
+- **Every unlock is split by the contract**: `unlock(jobId, unlockId, amount)` pulls the
+  $0.02 from the viewer wallet and sends each share straight to the creator and the agent,
+  in one transaction, at the share the auction set. The same `unlockId` can never be
+  charged twice.
+
+A party without its own wallet yet is paid via the revenue wallet and settled later as
+before; a leg the contract paid directly is recorded as settled, so the sweep never pays
+it a second time (tested). Recording an auction is best-effort: if it fails, the dub
+still goes ahead and its unlocks use path 3.
+
 ### Not yet wired: Circle Gateway (x402) batching
 
 The x402 seller/buyer code in `apps/backend/src/payments/` (EIP-3009
@@ -203,8 +246,9 @@ r = unlock_conversion_rate × unlock_price × agent_share
   = $0.001 per view
 ```
 
-A unit test fails if anyone changes the price or the split without the conversion
-assumption following. The conversion rate is a learned, per-(category, language)
+This is at the default 40% share, which is also the auction's reserve: a contested job
+clears lower, so `r` is lower for the winning agent. A unit test fails if anyone changes
+the price or the split without the conversion assumption following. The conversion rate is a learned, per-(category, language)
 parameter, and the dashboard shows this arithmetic.
 
 ### Safety
@@ -257,38 +301,85 @@ For each job, every active agent independently:
    people who saw the post         X's own view count (or interactions ÷ 2.7%, the
                                     median measured on 31 real X video posts)
    × share of X in that language   DataReportal ad reach by country (Spanish ≈ 8.1%)
-   × how well the post reaches it  50%  (assumption — corrected by the learning loop)
-   × how many open the dub         5%   (assumption; YouTube's dubbed tracks get >25%
-                                         of watch time with one-tap switching — our ceiling)
+   × how well the post reaches it  35% (20-50%)  assumption: big non-English X markets
+                                         rank "low"/"moderate" on the EF English Proficiency
+                                         Index, so an English post reaches about a third
+   × how many open the dub          2% (1-5%)   assumption: the dub is a link in a reply,
+                                         and organic links on X see ~1-3% click-through.
+                                         YouTube's dubbed tracks get >25% of watch time
+                                         with one-tap switching: our far ceiling
    ```
 
+   Both used to be 50% and 5% (ranges 25-75% and 2-15%); the old uptake's high case would
+   have beaten most paid ads. They are still assumptions, and the learning loop corrects
+   them.
+
    The persona decides which end of the range it plans on: Kestrel the low case, Magpie
-   the likely case, Finch the high case.
+   the likely case, Finch the high case. That plan is then scaled by the agent's
+   **calibration**: how its past forecasts compared with what actually happened (see
+   *Learning loop*).
 3. **Compute EV:** `EV = p_success × (predicted_views × r) − dub_cost`, where `p_success`
    is **that agent's own realised QC pass rate** — an agent that keeps shipping bad dubs
    correctly becomes pessimistic about itself.
-4. **Bid** if `EV > min_margin`.
+4. **Bid** if `EV > min_margin`. The bid is the **smallest agent share** at which its EV
+   still clears its margin. EV is linear in the share, so this is exact.
 
-The first approver claims the job via an atomic compare-and-set, so the personas visibly
-compete. They evaluate in shuffled order so no persona wins purely by list position.
+**The auction: sealed-bid, second-price, on the agent's share.** The lowest bid wins, since
+it leaves the creator the most, and the winner is paid the **runner-up's bid**, or the 40%
+reserve if it bid alone. Under second-price rules no agent gains by bidding anything but
+its true minimum: bidding higher can only lose the job, never raise the pay. The winner
+still clears its own margin at the price it is paid (tested). The claim itself is an
+atomic compare-and-set; evaluation order is shuffled only to break exact ties.
+
+Before, the first approving agent took the job at a fixed 40%. Same three personas, a
+Spanish clip, before and after:
+
+| Original views | Sealed bids | Winner | Creator's share |
+| --- | --- | --- | --- |
+| 400k | Finch 4.3%, Magpie 24.8% | Finch | 60% to 75% |
+| 1.2M | Finch 1.4%, Magpie 8.3% | Finch | 60% to 92% |
+| 5M | Finch 0.3%, Magpie 2.0%, Kestrel 24% | Finch | 60% to 98% |
+
+(Measured before the funnel assumptions were lowered. With the new ones fewer jobs clear
+at all, and the contested ones split the same way.)
 
 The worked example, which is an executable test:
 
 ```
-1.2M views × 8.1% × 50% × 5% ≈ 2,425 likely Spanish viewers
+1.2M views × 8.1% × 35% × 2% ≈ 680 likely Spanish viewers
 12.5% unlock rate · 70% chance of passing QC · $0.25 cost (30s)
-EV = 0.7 × (2,425 × $0.001) − $0.25 = +$1.44   → dub it
+EV = 0.7 × (680 × $0.001) − $0.25 = +$0.23   → dub it (clears Magpie's $0.10 margin)
 ```
 
-The same funnel gives a 10k-view post about 20 viewers, so a 2-cent dub only pays on posts
-with hundreds of thousands of views. That is what the agents do.
+The same funnel gives a 10k-view post about 6 viewers, so a 2-cent dub only pays on posts
+with roughly a million views or more. That is what the agents do. For a demo on a smaller
+post, `FORCE_DUB=true` skips only the margin test.
 
 **Personas:** *Magpie* (balanced, plans on the likely case), *Kestrel* (cautious — wide
 margin, plans on the low case), *Finch* (aggressive, plans on the high case, Spanish only).
 
+**Open entry: any team can add an agent.** `POST /api/agents/register` with a name and,
+optionally, `minMarginUsd`, `floorUsd`, `maxExposureUsd`, `dailyCapUsd`, `languageFocus`,
+`optimism` (`cautious` / `likely` / `optimistic`) and a `walletAddress` the contract can
+pay. The built-in formula then bids for it. Or give a **`bidUrl`** and bring your own
+model: before each auction Parrot POSTs the job, the dub cost, the reserve share and its
+own forecast to that URL, and the agent answers `{ "bidBps": 1500 }`, or
+`{ "bidBps": null }` to pass (format in `apps/backend/src/services/external-bids.ts`). All
+endpoints are asked in parallel with a 3-second timeout; a slow, broken or out-of-range
+answer is a pass, so one bad agent cannot stall an auction. Every entrant faces the same
+budget rules and starts with $12 of test credit. Limits: https endpoints only (plain http
+to localhost outside production), unique names, 25 agents.
+
 **Learning loop.** 24 hours later (one minute in demo mode) the realised views and unlocks
 are compared against the estimate and folded back into the bucket with exponential
-smoothing. It is idempotent, so a re-run cannot bias a bucket twice. Prediction error over
+smoothing. The same outcome also updates the **winning agent's calibration**: its
+correction moves 30% of the way (in log space) toward actual / forecast, clamped to
+0.1-3x. An agent that over-promises plans lower next time, and its reasoning says so ("my
+past forecasts ran about 40% high..."). Without this the most optimistic agent wins every
+contested auction and eats the losses when reality comes in lower (the winner's curse).
+In a 400-job simulation with noisy outcomes, calibration cut the share of dubs that lost
+money from 22% to 12% and raised total agent profit from $132 to $147. Finch's win share
+fell from 48% to 23%; the cautious Kestrel never wins in either case. It is idempotent, so a re-run cannot bias a bucket twice. Prediction error over
 time is charted. In demo mode outcomes are simulated and every such record is flagged.
 
 ---
@@ -331,9 +422,19 @@ backend is down, every page falls back to built-in sample data.
 credentials appear.
 
 ```bash
-npm test                 # 428 tests
+npm test                 # 510 tests (includes the contract, on an in-memory chain)
 npm run typecheck
 ```
+
+**Deploying the `ParrotSplitter` contract** (optional; everything works without it):
+
+1. Put funded `PARROT_REVENUE_PRIVATE_KEY` (becomes the contract's operator) and
+   `VIEWER_POOL_PRIVATE_KEY` in `.env`. Fund their addresses at `faucet.circle.com`
+   (choose Arc Testnet). `cd apps/backend && npx tsx src/scripts/wallet-balances.ts`
+   shows each address and balance.
+2. `npm run deploy:splitter -w @parrot/backend` compiles with solc, deploys, and approves
+   the contract to pull USDC from the viewer pool.
+3. Paste the printed `SPLITTER_ADDRESS` into `.env` and restart the backend.
 
 ## Parrot as a browser extension
 
@@ -435,8 +536,17 @@ settlements update live. `POST /api/demo/learn` compresses the 24-hour learning 
 | Explorer | `https://explorer.testnet.arc.io` |
 | Gateway facilitator (testnet) | `https://gateway-api-testnet.circle.com` |
 
-No custom contracts were deployed. Parrot uses USDC's ERC-20 interface and Circle's
-Gateway contracts as they are.
+Parrot's one custom contract, `ParrotSplitter` (`apps/backend/contracts/`), is deployed
+at **[`0xafe91baf2789e79c764313326c6a3125a968856d`](https://explorer.testnet.arc.io/address/0xafe91baf2789e79c764313326c6a3125a968856d)**:
+
+| Event | Transaction |
+| --- | --- |
+| Deploy | [`0x29140c68…4fbb`](https://explorer.testnet.arc.io/tx/0x29140c68b8ae918af77a7856845afefb984c51b89a79f8481b561d7a64ef4fbb) |
+| Viewer pool approves the contract | [`0x25daf553…9299`](https://explorer.testnet.arc.io/tx/0x25daf553ef0080a1b18222607a2cf3f567fd92c529117e04594813855ef29299) |
+| Auction recorded | [`0xeaab8b50…8da7`](https://explorer.testnet.arc.io/tx/0xeaab8b503dcb29c2928258da497e8a2a0b43a3c017aa26d37b263c4487b18da7), [`0xc802d600…1544`](https://explorer.testnet.arc.io/tx/0xc802d600698a86324e1797689dafa1cc7ff8f7950af0783db4c20d60c0541544) |
+| Unlock split ($0.02: $0.005892 to the agent, $0.014108 for the creator) | [`0x9da744dd…2dc6`](https://explorer.testnet.arc.io/tx/0x9da744ddd02b0f312606f49d2cbe3341f3c369c1c337c594ad5d7fcc4cab2dc6) |
+
+Everything else uses USDC's ERC-20 interface and Circle's Gateway contracts as they are.
 
 ### Two Arc traps worth documenting
 

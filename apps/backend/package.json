@@ -9,13 +9,14 @@
     "typecheck": "tsc --noEmit",
     "db:push": "drizzle-kit push",
     "db:seed": "tsx src/scripts/seed.ts",
-    "smoke:payments": "tsx src/scripts/smoke-payments.ts"
+    "smoke:payments": "tsx src/scripts/smoke-payments.ts",
+    "deploy:splitter": "tsx src/scripts/deploy-splitter.ts"
   },
   "dependencies": {
-    "@parrot/shared": "*",
     "@circle-fin/x402-batching": "^4.0.0",
-    "@x402/core": "^2.3.0",
     "@elevenlabs/elevenlabs-js": "^2.78.0",
+    "@parrot/shared": "*",
+    "@x402/core": "^2.3.0",
     "drizzle-orm": "^0.38.3",
     "express": "^4.21.2",
     "postgres": "^3.4.5",
@@ -24,6 +25,8 @@
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
-    "drizzle-kit": "^0.30.1"
+    "drizzle-kit": "^0.30.1",
+    "ganache": "^7.9.2",
+    "solc": "^0.8.28"
   }
 }

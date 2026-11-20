@@ -68,6 +68,17 @@ export interface Agent {
   /** ppm multiplier applied to its own view estimate; >1e6 is optimistic. */
   optimismPpm: number;
   active: boolean;
+  /**
+   * A third-party agent's own bidding endpoint. When set, the auction asks it
+   * for a bid instead of using the built-in formula. Budget rules still bind.
+   */
+  bidUrl?: string | null;
+  /**
+   * How this agent's forecasts have matched reality: actual / planned viewers,
+   * learned from its resolved jobs. 1e6 = no correction. An agent that keeps
+   * over-forecasting is scaled down, so optimism alone cannot win auctions.
+   */
+  calibrationPpm?: number;
 }
 
 export interface Job {

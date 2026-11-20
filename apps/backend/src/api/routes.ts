@@ -47,6 +47,7 @@ import {
 import { getConfig } from '../config.js';
 import { registerXCloneRoutes, type XCloneDeps } from '../xclone/routes.js';
 import { registerExtensionRoutes, type ExtensionDeps } from '../extension/routes.js';
+import { AgentRegistry, AgentRegistrationError } from '../services/agent-registry.js';
 
 /** Cookie that identifies a guest viewer. No sign-in, no popup, no wallet. */
 const VIEWER_COOKIE = 'parrot_viewer';
@@ -243,6 +244,7 @@ export function createApp(deps: RouteDeps): Express {
         splitCreatorBps: job.splitCreatorBps,
         viewerPoolPrivateKey: getConfig().env.VIEWER_POOL_PRIVATE_KEY as `0x${string}` | undefined,
         revenueAccountId: revenueAccount?.id,
+        splitter: payments.splitterRouteFor(job),
       });
 
       await pipeline.notePaidUnlock(job.id);
@@ -385,6 +387,21 @@ export function createApp(deps: RouteDeps): Express {
   }
 
   app.get('/api/agents', (_req, res) => res.json(buildAgentDashboard()));
+
+  // Open entry: any team can put a dubbing agent into the auction.
+  // See services/agent-registry.ts (fields) and external-bids.ts (bidUrl format).
+  const registry = new AgentRegistry(store, payments, getConfig().env.NODE_ENV === 'production');
+  app.post('/api/agents/register', (req, res) => {
+    try {
+      const agent = registry.register(req.body);
+      res.status(201).json({ ok: true, agent: agentSummary(store, agent) });
+    } catch (error: unknown) {
+      if (error instanceof AgentRegistrationError) {
+        return res.status(400).json({ ok: false, code: 'BAD_AGENT', detail: error.message });
+      }
+      throw error;
+    }
+  });
 
   // -------------------------------------------------------------------------
   // Bot console (the mock X adapter surface)

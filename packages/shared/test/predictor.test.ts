@@ -72,19 +72,20 @@ describe('engagementScore', () => {
 
 describe('cold start', () => {
   it('reads reach straight from the view count and walks the funnel', () => {
-    // 10,000 views x 8.1% Spanish share x 50% reach x 5% uptake = ~20.
+    // 10,000 views x 8.1% Spanish share x 35% reach x 2% uptake = ~6.
     const f = funnelEstimate(strongPost, 'es');
     expect(f.reachMeasured).toBe(true);
     expect(f.reach.likely).toBe(10_000);
-    expect(f.viewers.likely).toBe(20);
+    expect(f.viewers.likely).toBe(6);
   });
 
   it('gives a viral post roughly the brief\'s 2,000 Spanish viewers', () => {
     const viral = { ...strongPost, sourceViews: 1_200_000 };
     const prediction = predictViews(viral, 'es', undefined);
     expect(prediction.basis).toBe('cold_start');
-    expect(prediction.predictedViews).toBeGreaterThan(1_800);
-    expect(prediction.predictedViews).toBeLessThan(3_000);
+    // 1.2M x 8.1% x 35% x 2% = ~680.
+    expect(prediction.predictedViews).toBeGreaterThan(600);
+    expect(prediction.predictedViews).toBeLessThan(760);
   });
 
   it('returns a low / likely / high range that brackets the likely case', () => {

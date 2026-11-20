@@ -36,9 +36,11 @@ import {
 } from '@parrot/shared';
 import type { Store } from '../store/store.js';
 import type { Job, Agent } from '../store/types.js';
-import { DecisionService, estimateDubCost } from './decision-service.js';
+import { DecisionService, estimateDubCost, type DecisionOutcome } from './decision-service.js';
 import { PaymentService } from './payment-service.js';
-import { agentPrivateKey } from '../config.js';
+import { agentPrivateKey, getConfig } from '../config.js';
+import { recordAuctionOnchain } from '../chain/splitter.js';
+import { collectExternalBids } from './external-bids.js';
 
 export interface PipelineHooks {
   /** Called after every accepted transition, for SSE and bot replies. */
@@ -111,6 +113,7 @@ export class JobPipeline {
     event: JobEventType,
     patch: Partial<Job> = {},
     payload: Record<string, unknown> | null = null,
+    txHash: string | null = null,
   ): Promise<Job> {
     const from: JobState = job.state;
     const to = transition(from, event);
@@ -122,7 +125,7 @@ export class JobPipeline {
       fromState: from,
       toState: to,
       payload,
-      txHash: null,
+      txHash,
     });
 
     await this.hooks.onTransition?.(updated, event);
@@ -221,7 +224,9 @@ export class JobPipeline {
       if (job.state === 'PARSED') job = await this.advance(job, 'EVALUATION_STARTED');
 
       if (job.state === 'EVALUATING') {
-        const outcome = this.decisions.runAuction(job);
+        // Third-party agents answer from their own servers; ask them first.
+        const externalBids = await collectExternalBids(this.store, job);
+        const outcome = this.decisions.runAuction(job, externalBids);
 
         // Record every agent's reasoning, winners and losers alike. The losing
         // bids are half the story on the dashboard.
@@ -233,7 +238,11 @@ export class JobPipeline {
             fromState: 'EVALUATING',
             toState: null,
             payload: {
-              decision: bid.decision as unknown as Record<string, unknown>,
+              // The winner's entry carries the auction result: its bid and the
+              // share it is actually paid.
+              decision: (won && outcome.winningDecision
+                ? outcome.winningDecision
+                : bid.decision) as unknown as Record<string, unknown>,
               // Several agents can approve; only one wins the claim. Recording
               // this is what stops the dashboard crediting a losing bidder.
               won,
@@ -273,11 +282,15 @@ export class JobPipeline {
         });
         this.store.seedBucketIfMissing(job.category, job.targetLang);
 
+        // The auction set the split; re-read the job so it carries it.
+        job = this.store.getJob(job.id) as Job;
+        const auctionTx = await this.recordAuctionOnchain(job, outcome);
         job = await this.advance(
           job,
           'APPROVED',
           { decision: outcome.winningDecision },
-          { agent: outcome.winner.name },
+          { agent: outcome.winner.name, auction: outcome.auction },
+          auctionTx,
         );
       }
 
@@ -297,6 +310,35 @@ export class JobPipeline {
       }
       const detail = error instanceof Error ? error.message : String(error);
       return this.fail(current, 'INTERNAL_ERROR', detail);
+    }
+  }
+
+  /**
+   * Write the auction's result to the ParrotSplitter contract: winner, share,
+   * and a hash of every agent's decision. Best effort - a chain hiccup must not
+   * cost the creator their dub, so failure is logged and unlocks fall back to
+   * the revenue-wallet path.
+   */
+  private async recordAuctionOnchain(job: Job, outcome: DecisionOutcome): Promise<string | null> {
+    const payees = this.payments.splitPayees(job);
+    const operatorKey = getConfig().env.PARROT_REVENUE_PRIVATE_KEY;
+    const splitter = getConfig().env.SPLITTER_ADDRESS;
+    if (!payees || !operatorKey || !splitter || !outcome.auction) return null;
+    try {
+      return await recordAuctionOnchain({
+        operatorKey: operatorKey as `0x${string}`,
+        splitter: splitter as `0x${string}`,
+        jobId: job.id,
+        creator: payees.creator,
+        agent: payees.agent,
+        agentBps: outcome.auction.clearingBps,
+        bidders: outcome.auction.bids.length,
+        decisions: outcome.bids.map((b) => b.decision),
+      });
+    } catch (error: unknown) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`[pipeline] job ${job.id}: recording the auction on-chain failed - ${detail}`);
+      return null;
     }
   }
 
