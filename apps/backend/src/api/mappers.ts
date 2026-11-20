@@ -1,542 +1,510 @@
 /**
- * Domain record -> wire DTO mappers.
- *
- * Two rules enforced here so the UI cannot break them:
- *  1. Money crosses as BOTH an integer micros string and a pre-formatted
- *     display string. The UI renders the display string and never does money
- *     arithmetic.
- *  2. A "Verify on Arc" link is emitted ONLY for a settlement that is genuinely
- *     confirmed on-chain with a real transaction hash. A simulated settlement
- *     gets `verifyUrl: null` and `simulated: true`, so the UI physically cannot
- *     show a verification link for something that did not happen.
+ * Domain records -> the DTOs in @parrot/shared. The only place a record is
+ * turned into something the front ends read, so every label and every money
+ * figure is formatted here and nowhere else.
  */
 
 import {
-  formatUsd,
-  formatPpmPercent,
-  languageName,
-  roiPpm,
-  txUrl,
+  ARC_TESTNET,
+  DEFAULT_POST_BUDGET,
+  DEFAULT_VALUE_PER_THOUSAND_VIEWS,
+  DUBBING_TIER,
+  ELEVENLABS_PRICE_PER_MINUTE,
+  EXPLORE_LANGUAGE_COUNT,
+  EXPLORE_POSTS,
+  MAX_WINNERS,
+  PRICE_PER_VIEW,
+  USDC_ADDRESS,
+  addPnl,
   addressUrl,
+  breakEvenViews,
   copy,
   fill,
-  ppm,
+  formatUsd,
+  languageByCode,
   micros,
-  PREVIEW_SECONDS,
-  UNLOCK_PRICE,
-  ARC_TESTNET,
-  USDC_ADDRESS,
-  GATEWAY_WALLET_ADDRESS,
-  type Micros,
-  type JobState,
-  type MoneyDto,
-  type ReceiptDto,
-  type DubPageDto,
+  pnlLine,
+  txUrl,
+  viewsCostMoreThanTheyAreWorth,
   type CreatorDashboardDto,
-  type CreatorDubRowDto,
-  type AgentSummaryDto,
-  type AgentJobRowDto,
-  type DecisionLogEntryDto,
-  type EvMathDto,
-  type TickerEntryDto,
-  type AccuracyPointDto,
+  type DubDto,
+  type DubPageDto,
+  type LanguagePlan,
+  type LanguageRefDto,
+  type LanguageRowDto,
+  type LanguageStatus,
+  type Micros,
+  type MoneyDto,
+  type PaymentDto,
+  type PlanDto,
+  type PlanRole,
+  type PnlLine,
+  type PostDto,
+  type QcCheckDto,
+  type ShareDto,
   type SystemStatusDto,
-  type BotPostDto,
-  type FeedStatusDto,
+  type UndubbedPostDto,
 } from '@parrot/shared';
-import type { Store } from '../store/store.js';
-import type {
-  Agent,
-  BotPost,
-  Creator,
-  Job,
-  Settlement,
-  Unlock,
-  PredictionRecord,
-} from '../store/types.js';
 import { getConfig } from '../config.js';
+import { statusPhrase } from '../bot/bot-service.js';
+import { CampaignService } from '../services/campaign-service.js';
+import type { Insight, InsightFacts } from '../services/insight-service.js';
+import { OTHER_LANGUAGE } from '../services/reply-languages.js';
+import type { Store } from '../store/store.js';
+import type { BotPost, Charge, Creator, Dub, DubbedPost } from '../store/types.js';
+
+// ---------------------------------------------------------------------------
+// Primitives
+// ---------------------------------------------------------------------------
+
+/** Below a dime, a third decimal carries real information ("$0.008"). */
+export function money(amount: Micros): MoneyDto {
+  const raw = amount as bigint;
+  const abs = raw < 0n ? -raw : raw;
+  const small = abs !== 0n && abs < 100_000n;
+  return { micros: raw.toString(), display: formatUsd(amount, { maxDecimals: small ? 3 : 2 }) };
+}
 
 /**
- * Turn a stored media path into something a browser can actually fetch.
- *
- * DubbingService writes a FILESYSTEM path (on Windows, with backslashes). Handing
- * that to an <audio src> yields a 404 and a dub that cannot play - which is the
- * one thing the viewer page exists to do. Everything is served from /media.
+ * A stored media path -> the address it is served at. Stored paths are local
+ * file paths; handing one to a <video src> would 404. Everything is served
+ * from /media.
  */
-export function mediaUrl(storedPath: string | null): string | null {
+export function mediaUrl(storedPath: string | null | undefined): string | null {
   if (!storedPath) return null;
   if (/^https?:\/\//i.test(storedPath)) return storedPath;
   const base = getConfig().env.PUBLIC_BACKEND_URL.replace(/\/$/, '');
-  // Split on BOTH separators: these paths are written by Node on Windows, so
-  // they arrive with backslashes.
+  // Split on BOTH separators: these paths may have been written on Windows.
   const file = storedPath.split(/[\\/]/).pop();
-  if (!file) return null;
-  return `${base}/media/${encodeURIComponent(file)}`;
+  return file ? `${base}/media/${encodeURIComponent(file)}` : null;
 }
 
-export function money(amount: Micros, maxDecimals: 2 | 3 = 2): MoneyDto {
+export function languageRef(code: string): LanguageRefDto {
+  const spec = languageByCode(code);
   return {
-    micros: (amount as bigint).toString(),
-    display: formatUsd(amount, { maxDecimals: displayDecimals(amount, maxDecimals) }),
+    code,
+    name: spec?.englishName ?? code,
+    nativeName: spec?.nativeName ?? code,
+    flag: spec?.flag ?? '',
   };
 }
 
-/** Below this, a third decimal carries real information ("$0.008"). */
-const SUB_CENT_DISPLAY_LIMIT = 100_000n; // $0.10 in micros
-
-/**
- * Sub-cent precision only where it matters. An agent's 40% of one unlock is
- * $0.008 and must not read as $0.00, but a running total like "$1.032" just
- * looks like a typo, so anything from 10 cents up is shown in whole cents.
- */
-function displayDecimals(amount: Micros, requested: 2 | 3): 2 | 3 {
-  if (requested === 2) return 2;
-  const raw = amount as bigint;
-  const abs = raw < 0n ? -raw : raw;
-  return abs < SUB_CENT_DISPLAY_LIMIT ? 3 : 2;
-}
-
-/** Plain-language status label. Never leaks a state machine name to a user. */
-export function statusLabel(state: JobState): string {
-  const map: Record<JobState, string> = {
-    REQUESTED: copy.status.requested,
-    PARSED: copy.status.parsed,
-    EVALUATING: copy.status.evaluating,
-    DECLINED: copy.status.declined,
-    APPROVED: copy.status.approved,
-    DUBBING: copy.status.dubbing,
-    QC: copy.status.qc,
-    REJECTED_BY_QC: copy.status.rejectedByQc,
-    PUBLISHED: copy.status.published,
-    EARNING: copy.status.earning,
-    SETTLED: copy.status.settled,
-    FAILED: copy.status.failed,
-  };
-  return map[state];
-}
-
-/**
- * A settlement as a receipt. The verify link appears only when there is
- * something real to verify.
- */
-export function settlementReceipt(settlement: Settlement, store: Store): ReceiptDto {
-  const recipient = store.getAccount(settlement.toAccountId);
-  const confirmed = settlement.status === 'confirmed';
-  const verifiable = confirmed && !settlement.simulated && settlement.txHash !== null;
-
-  const titles: Record<string, { title: string; detail: string }> = {
-    creator_payout: {
-      title: copy.receipt.payoutSent,
-      detail: fill(copy.receipt.payoutSentDetail, {
-        amount: formatUsd(settlement.amount),
-      }),
-    },
-    creator_share: {
-      title: copy.receipt.creatorSharePaid,
-      detail: fill(copy.receipt.creatorSharePaidDetail, {
-        amount: formatUsd(settlement.amount),
-        handle: recipient?.label ?? 'the creator',
-      }),
-    },
-    agent_share: {
-      title: copy.receipt.parrotSharePaid,
-      detail: fill(copy.receipt.parrotSharePaidDetail, {
-        amount: formatUsd(settlement.amount, { maxDecimals: displayDecimals(settlement.amount, 3) }),
-      }),
-    },
-    dub_cost: {
-      title: copy.receipt.dubCost,
-      detail: fill(copy.receipt.dubCostDetail, { amount: formatUsd(settlement.amount) }),
-    },
-  };
-
-  const chosen = titles[settlement.kind] ?? {
-    title: copy.receipt.payoutSent,
-    detail: fill(copy.receipt.payoutSentDetail, { amount: formatUsd(settlement.amount) }),
-  };
-
-  return {
-    id: settlement.id,
-    title: chosen.title,
-    detail: chosen.detail,
-    amount: money(settlement.amount, 3),
-    at: settlement.createdAt.toISOString(),
-    status: settlement.status,
-    verifyUrl: verifiable ? txUrl(settlement.txHash as string) : null,
-    simulated: settlement.simulated,
-  };
-}
-
-/** An unlock as a receipt, from the paying viewer's point of view. */
-export function unlockReceipt(unlock: Unlock, job: Job): ReceiptDto {
-  return {
-    id: unlock.id,
-    title: copy.receipt.unlockPaid,
-    detail: fill(copy.receipt.unlockPaidDetail, {
-      amount: formatUsd(unlock.amount),
-      language: languageName(job.targetLang),
-    }),
-    amount: money(unlock.amount),
-    at: unlock.createdAt.toISOString(),
-    status: 'confirmed',
-    // An unlock paid on-chain carries its transaction hash as the payment
-    // reference, so it links to the explorer. A ledger-only (simulated) unlock
-    // has no transaction of its own, and gets no link rather than a made-up one.
-    verifyUrl: unlockTxUrl(unlock),
-    simulated: unlock.simulated,
-  };
-}
-
-/** The explorer link for an unlock paid on-chain, or null when there is none. */
-export function unlockTxUrl(unlock: Unlock): string | null {
-  return !unlock.simulated && unlock.paymentRef !== null && /^0x[0-9a-fA-F]{64}$/.test(unlock.paymentRef)
-    ? txUrl(unlock.paymentRef)
-    : null;
-}
-
-export function dubPage(
-  store: Store,
-  job: Job,
-  viewerAccountId: string | null,
-): DubPageDto {
-  const creator = store.creators.get(job.creatorId);
-  const unlocks = store.unlocksForJob(job.id);
-  const viewerUnlock = viewerAccountId ? store.findUnlock(job.id, viewerAccountId) : undefined;
-  const unlocked = viewerUnlock !== undefined;
-
-  const receipts: ReceiptDto[] = [];
-  if (viewerUnlock) receipts.push(unlockReceipt(viewerUnlock, job));
-  for (const settlement of store.settlementsForJob(job.id)) {
-    receipts.push(settlementReceipt(settlement, store));
+const COUNTRY_NAMES = new Map<string, string>();
+const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
+function countryName(code: string): string {
+  const cached = COUNTRY_NAMES.get(code);
+  if (cached) return cached;
+  let name = code;
+  try {
+    name = regionNames.of(code) ?? code;
+  } catch {
+    // Not a region code: show it as it came.
   }
+  COUNTRY_NAMES.set(code, name);
+  return name;
+}
 
+/** A tally -> shares of its total, largest first. */
+export function shares(tally: Readonly<Record<string, number>>, nameOf: (code: string) => string, limit = 6): ShareDto[] {
+  const total = Object.values(tally).reduce((a, b) => a + b, 0);
+  if (total <= 0) return [];
+  return Object.entries(tally)
+    .filter(([, count]) => count > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([code, count]) => ({ code, name: nameOf(code), count, percent: Math.round((count / total) * 100) }));
+}
+
+const replyLanguageName = (code: string): string => (code === OTHER_LANGUAGE ? 'Other' : languageRef(code).name);
+
+function mergeTallies(tallies: readonly Readonly<Record<string, number>>[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const tally of tallies) for (const [code, count] of Object.entries(tally)) out[code] = (out[code] ?? 0) + count;
+  return out;
+}
+
+const STATUS_LABEL: Readonly<Record<LanguageStatus, string>> = {
+  winner: copy.language.winner,
+  testing: copy.language.testing,
+  untested: copy.language.untested,
+  dropped: copy.language.dropped,
+};
+
+const ROLE_LABEL: Readonly<Record<PlanRole | 'requested', string>> = {
+  winner: copy.language.roleWinner,
+  test: copy.language.roleTest,
+  explore: copy.language.roleExplore,
+  requested: 'You asked',
+};
+
+const MODE_LABEL = {
+  explore: copy.language.modeExplore,
+  focus: copy.language.modeFocus,
+  requested: 'Dubbed on request',
+} as const;
+
+// ---------------------------------------------------------------------------
+// Dubs and posts
+// ---------------------------------------------------------------------------
+
+function linePnl(dub: Dub, creator: Creator): PnlLine {
+  return pnlLine({
+    views: CampaignService.viewsOf(dub),
+    paid: dub.paid,
+    valuePerThousand: creator.valuePerThousand,
+    dubCost: dub.dubCost,
+  });
+}
+
+function qcChecks(dub: Dub): DubDto['qc'] {
+  if (!dub.qcReport) return null;
+  const checks: QcCheckDto[] = dub.qcReport.checks.map((check) => ({
+    name: check.name,
+    label: copy.qc[check.name],
+    status: check.status,
+    statusLabel: copy.qc[check.status],
+    detail: check.detail,
+  }));
+  return { passed: dub.qcReport.passed, checks };
+}
+
+export function dubDto(dub: Dub, creator: Creator): DubDto {
+  const views = CampaignService.viewsOf(dub);
+  const pnl = linePnl(dub, creator);
+  const needed = breakEvenViews(dub.dubCost);
+  const live = dub.state === 'PUBLISHED';
   return {
-    jobId: job.id,
-    state: job.state,
-    targetLang: job.targetLang,
-    targetLanguageName: languageName(job.targetLang),
-    sourceLanguageName: null,
-    creator: {
-      handle: creator?.handle ?? 'unknown',
-      displayName: creator?.displayName ?? 'Unknown creator',
-    },
-    sourceUrl: job.sourceUrl,
-    durationS: job.durationS,
-    posterUrl: mediaUrl(job.posterUrl),
-    previewUrl: mediaUrl(job.previewUrl),
-    fullUrl: unlocked ? mediaUrl(job.dubUrl) : null,
-    previewSeconds: PREVIEW_SECONDS,
-    price: money(UNLOCK_PRICE),
-    unlocked,
-    unlockCount: unlocks.length,
-    viewCount: job.viewCount,
-    viewerBalance: viewerAccountId ? money(store.balanceOf(viewerAccountId)) : null,
-    receipts,
-    simulated: unlocks.some((u) => u.simulated),
+    ...languageRef(dub.lang),
+    id: dub.id,
+    state: dub.state,
+    statusLabel: statusPhrase(dub.state),
+    role: dub.role,
+    roleLabel: ROLE_LABEL[dub.role],
+    simulatedDub: dub.simulatedDub,
+    views,
+    simulatedViews: dub.simulatedViews,
+    likes: dub.likes,
+    replies: dub.replies,
+    reposts: dub.reposts,
+    breakEvenViews: needed,
+    breakEvenPercent: needed > 0 ? Math.min(100, Math.round((views / needed) * 100)) : 0,
+    paidForItself: live && views >= needed,
+    value: money(pnl.value),
+    paid: money(pnl.paid),
+    net: money(pnl.net),
+    dubCost: money(dub.dubCost),
+    watchPath: live ? `/dub/${dub.id}` : null,
+    threadUrl: live ? dub.replyUrl : null,
+    qc: qcChecks(dub),
+    problem: dub.problem,
+    countries: shares(dub.countries, countryName),
+    replyLanguages: shares(dub.replyLanguages, replyLanguageName),
   };
 }
 
-export function creatorDashboard(store: Store, creator: Creator): CreatorDashboardDto {
-  const jobs = store.jobsForCreator(creator.id);
-  const balance = store.balanceOf(creator.accountId);
-  const earned = store.totalEarned(creator.accountId, ['creator_share']);
-  const paidOut = store.totalSpend(creator.accountId, 'creator_payout');
+export function postDto(store: Store, post: DubbedPost, creator: Creator): PostDto {
+  const dubs = store.dubsForPost(post.id);
+  const total = addPnl(dubs.filter((d) => d.state === 'PUBLISHED').map((d) => linePnl(d, creator)));
+  const budget = post.budget as bigint;
+  const paid = total.paid as bigint;
+  return {
+    id: post.id,
+    text: post.text,
+    postUrl: post.sourceUrl,
+    createdAt: post.createdAt.toISOString(),
+    durationS: post.durationS,
+    originalViews: post.originalViews,
+    mode: post.mode,
+    modeLabel: MODE_LABEL[post.mode],
+    summary: post.summary,
+    working: dubs.some((d) => d.state === 'QUEUED' || d.state === 'DUBBING' || d.state === 'QC'),
+    measured: post.measuredAt !== null,
+    demoAudience: post.demoAudience,
+    views: dubs.reduce((sum, d) => sum + (d.state === 'PUBLISHED' ? CampaignService.viewsOf(d) : 0), 0),
+    value: money(total.value),
+    paid: money(total.paid),
+    net: money(total.net),
+    budget: money(post.budget),
+    budgetPercent: budget > 0n ? Math.min(100, Number((paid * 100n) / budget)) : 0,
+    // Within one view's price of the budget counts as reached.
+    budgetReached: budget > 0n && budget - paid < (PRICE_PER_VIEW as bigint),
+    dubs: dubs.map((d) => dubDto(d, creator)),
+  };
+}
 
-  const dubs: CreatorDubRowDto[] = jobs.map((job) => {
-    const unlocks = store.unlocksForJob(job.id);
-    const earnedOnJob = unlocks.reduce((sum, u) => sum + (u.creatorShare as bigint), 0n);
+// ---------------------------------------------------------------------------
+// Plan and languages
+// ---------------------------------------------------------------------------
+
+export function planDto(plan: LanguagePlan, basedOnPosts: number): PlanDto {
+  return {
+    mode: plan.mode,
+    modeLabel: MODE_LABEL[plan.mode],
+    summary: plan.summary,
+    basedOnPosts,
+    entries: plan.entries.map((entry) => ({
+      ...languageRef(entry.lang),
+      role: entry.role,
+      roleLabel: ROLE_LABEL[entry.role],
+      reason: entry.reason,
+    })),
+  };
+}
+
+function languageRows(store: Store, creator: Creator, plan: LanguagePlan): LanguageRowDto[] {
+  const live = store.dubsForCreator(creator.id).filter((d) => d.state === 'PUBLISHED');
+  return plan.standings.map((standing) => {
+    const dubs = live.filter((d) => d.lang === standing.lang);
+    const total = addPnl(dubs.map((d) => linePnl(d, creator)));
     return {
-      jobId: job.id,
-      targetLanguageName: languageName(job.targetLang),
-      state: job.state,
-      statusLabel: statusLabel(job.state),
-      views: job.viewCount,
-      unlocks: unlocks.length,
-      earned: money(micros(earnedOnJob), 3),
-      publishedAt: job.publishedAt?.toISOString() ?? null,
-      dubPath: `/dub/${job.id}`,
+      ...languageRef(standing.lang),
+      status: standing.status,
+      statusLabel: STATUS_LABEL[standing.status],
+      // Every live dub is shown, including ones on a post not yet measured;
+      // `status` and `reason` come only from what has been measured.
+      tries: dubs.length,
+      views: dubs.reduce((sum, d) => sum + CampaignService.viewsOf(d), 0),
+      avgViews: Math.round(standing.avgViews),
+      coverage: Math.round(standing.avgCoverage * 10) / 10,
+      value: money(total.value),
+      paid: money(total.paid),
+      net: money(total.net),
+      dubCost: money(total.dubCost),
+      reason: standing.reason,
     };
   });
+}
 
-  const receipts = store
-    .allSettlements()
-    .filter((s) => s.toAccountId === creator.accountId)
-    .map((s) => settlementReceipt(s, store));
+// ---------------------------------------------------------------------------
+// Payments
+// ---------------------------------------------------------------------------
+
+const PAYMENT_STATUS = {
+  pending: copy.payment.pending,
+  confirmed: copy.payment.confirmed,
+  failed: copy.payment.failed,
+} as const;
+
+export function paymentDto(charge: Charge): PaymentDto {
+  const languages = [...new Set(charge.lines.map((l) => languageRef(l.lang).name))];
+  const languageText = languages.length <= 2 ? languages.join(' and ') : `${languages.length} languages`;
+  const real = charge.status === 'confirmed' && !charge.testMode && charge.txHash !== null;
+  const notes: string[] = [];
+  if (charge.testMode) notes.push(copy.payment.demoBalanceNote);
+  if (charge.simulatedViews) notes.push(copy.payment.simulatedViewsNote);
+  return {
+    id: charge.id,
+    at: (charge.confirmedAt ?? charge.createdAt).toISOString(),
+    title: fill(copy.payment.title, { views: charge.views.toLocaleString('en-US') }),
+    detail: fill(copy.payment.detail, {
+      views: charge.views.toLocaleString('en-US'),
+      languages: languageText,
+      price: formatUsd(micros((PRICE_PER_VIEW as bigint) * 1_000n)),
+    }),
+    amount: money(charge.amount),
+    views: charge.views,
+    status: charge.status,
+    statusLabel: PAYMENT_STATUS[charge.status],
+    // A link exists only for a payment that really happened.
+    verifyUrl: real ? txUrl(charge.txHash as string) : null,
+    testMode: charge.testMode,
+    simulatedViews: charge.simulatedViews,
+    note: notes.length > 0 ? notes.join(' ') : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/creators/:handle
+// ---------------------------------------------------------------------------
+
+export interface DashboardInput {
+  readonly store: Store;
+  readonly creator: Creator;
+  readonly plan: LanguagePlan;
+  readonly postsMeasured: number;
+  /** Null when it could not be read. */
+  readonly balance: Micros | null;
+  readonly owed: Micros;
+  readonly canEdit: boolean;
+  readonly demo: boolean;
+  /** The creator's video posts on the timeline, newest first. */
+  readonly videoPosts: readonly BotPost[];
+  readonly postUrl: (postId: string) => string;
+  readonly insightFor: (facts: InsightFacts) => Insight | null;
+}
+
+export function creatorDashboard(input: DashboardInput): CreatorDashboardDto {
+  const { store, creator, plan } = input;
+  const posts = store.postsForCreator(creator.id);
+  const dubs = store.dubsForCreator(creator.id);
+  const live = dubs.filter((d) => d.state === 'PUBLISHED');
+  const total = addPnl(live.map((d) => linePnl(d, creator)));
+  const languages = languageRows(store, creator, plan);
+  const totalViews = live.reduce((sum, d) => sum + CampaignService.viewsOf(d), 0);
+
+  const dubbedSources = new Set(posts.map((p) => p.sourcePostId));
+  const undubbed: UndubbedPostDto[] = input.videoPosts
+    .filter((p) => !dubbedSources.has(p.id) && p.videoDurationS !== null)
+    .map((p) => ({
+      postId: p.id,
+      text: p.text,
+      postUrl: input.postUrl(p.id),
+      createdAt: p.createdAt.toISOString(),
+      durationS: p.videoDurationS as number,
+      views: p.metrics?.views ?? null,
+    }));
+
+  const countries = shares(mergeTallies(live.map((d) => d.countries)), countryName, 8);
+  const replyLanguages = shares(mergeTallies(live.map((d) => d.replyLanguages)), replyLanguageName, 8);
+
+  const facts: InsightFacts = {
+    handle: creator.handle,
+    postsMeasured: input.postsMeasured,
+    planSummary: plan.summary,
+    languages: languages.map((row) => {
+      const mine = live.filter((d) => d.lang === row.code);
+      const replies = mergeTallies(mine.map((d) => d.replyLanguages));
+      const replyTotal = Object.values(replies).reduce((a, b) => a + b, 0);
+      return {
+        name: row.name,
+        status: row.statusLabel,
+        tries: row.tries,
+        avgViews: row.avgViews,
+        coverage: row.coverage,
+        topCountry: shares(mergeTallies(mine.map((d) => d.countries)), countryName, 1)[0]?.name ?? null,
+        repliesInLanguagePercent: replyTotal > 0 ? Math.round(((replies[row.code] ?? 0) / replyTotal) * 100) : null,
+      };
+    }),
+    totalViews,
+    paid: formatUsd(total.paid),
+    value: formatUsd(total.value),
+    net: formatUsd(total.net),
+  };
+  const insight = input.insightFor(facts);
+
+  const warnings: string[] = [];
+  if (creator.lowBalance) warnings.push(copy.warnings.lowBalance);
+  if (viewsCostMoreThanTheyAreWorth(creator.valuePerThousand)) {
+    warnings.push(
+      fill(copy.warnings.valueBelowPrice, {
+        value: formatUsd(creator.valuePerThousand),
+        price: formatUsd(micros((PRICE_PER_VIEW as bigint) * 1_000n)),
+      }),
+    );
+  }
 
   return {
     handle: creator.handle,
     displayName: creator.displayName,
-    signedIn: creator.claimed,
-    totalEarned: money(earned, 3),
-    readyToClaim: money(balance, 3),
-    paidOut: money(paidOut, 3),
-    creatorSharePercent: formatPpmPercent(ppm(600_000), 0),
-    dubs,
-    receipts,
+    balanceKind: creator.userId ? 'account' : 'demo',
+    balance: input.balance === null ? null : money(input.balance),
+    owed: money(input.owed),
+    canEdit: input.canEdit,
+    claimed: creator.userId !== null,
+    settings: {
+      valuePerThousand: money(creator.valuePerThousand),
+      valueIsDefault: creator.valueIsDefault,
+      postBudget: money(creator.postBudget),
+      autoDub: creator.autoDub,
+      pricePerThousand: money(micros((PRICE_PER_VIEW as bigint) * 1_000n)),
+    },
+    totals: {
+      views: totalViews,
+      value: money(total.value),
+      paid: money(total.paid),
+      net: money(total.net),
+      postsDubbed: posts.length,
+      dubsLive: live.length,
+      languagesTried: new Set(live.map((d) => d.lang)).size,
+      dubCostCovered: money(micros(dubs.reduce((sum, d) => sum + (d.dubCost as bigint), 0n))),
+    },
+    nextPlan: planDto(plan, input.postsMeasured),
+    languages,
+    posts: posts
+      .slice()
+      .reverse()
+      .map((p) => postDto(store, p, creator)),
+    undubbed,
+    payments: store.chargesForCreator(creator.id).map(paymentDto),
+    audience: {
+      countries,
+      replyLanguages,
+      insight: insight?.text ?? null,
+      insightBy: insight?.by ?? null,
+    },
+    warnings,
+    demo: input.demo,
   };
 }
 
-function evMath(job: Job): EvMathDto | null {
-  const decision = job.decision;
-  if (!decision) return null;
+// ---------------------------------------------------------------------------
+// GET /api/dubs/:id
+// ---------------------------------------------------------------------------
+
+export function dubPage(store: Store, dub: Dub): DubPageDto | null {
+  const post = store.posts.get(dub.postId);
+  const creator = store.creators.get(dub.creatorId);
+  if (!post || !creator) return null;
+  const live = dub.state === 'PUBLISHED';
+  const file = dub.mediaPath ?? '';
   return {
-    predictedViews: decision.inputs.predictedViews,
-    conversionPercent: formatPpmPercent(ppm(decision.inputs.conversionPpm)).replace('%', ''),
-    pSuccessPercent: formatPpmPercent(ppm(decision.inputs.pSuccessPpm)),
-    rPerView: money(micros(BigInt(decision.result.rPerViewMicros)), 3),
-    agentTakePerUnlock: money(
-      micros(
-        (BigInt(decision.inputs.unlockPriceMicros) * BigInt(decision.inputs.agentBps)) / 10_000n,
-      ),
-      3,
-    ),
-    unlockPrice: money(micros(BigInt(decision.inputs.unlockPriceMicros))),
-    agentSharePercent: `${decision.inputs.agentBps / 100}%`,
-    expectedRevenue: money(micros(BigInt(decision.result.expectedRevenueMicros)), 3),
-    dubCost: money(micros(BigInt(decision.inputs.dubCostMicros))),
-    ev: money(micros(BigInt(decision.result.evMicros)), 3),
-    minMargin: money(micros(BigInt(decision.inputs.minMarginMicros))),
-    confidencePercent: formatPpmPercent(ppm(decision.result.confidencePpm)).replace('%', ''),
-    basis: decision.result.basis,
+    ...languageRef(dub.lang),
+    id: dub.id,
+    state: dub.state,
+    statusLabel: statusPhrase(dub.state),
+    creatorHandle: creator.handle,
+    creatorDisplayName: creator.displayName,
+    originalText: post.text,
+    originalUrl: post.sourceUrl,
+    mediaUrl: live ? mediaUrl(dub.mediaPath) : null,
+    mediaKind: /\.(mp4|webm|mov|mkv)$/i.test(file) ? 'video' : 'audio',
+    durationS: post.durationS,
+    simulatedDub: dub.simulatedDub,
+    views: CampaignService.viewsOf(dub),
+    alsoIn: store
+      .dubsForPost(post.id)
+      .filter((d) => d.id !== dub.id && d.state === 'PUBLISHED')
+      .map((d) => ({ ...languageRef(d.lang), watchPath: `/dub/${d.id}` })),
   };
 }
 
-export function decisionLog(store: Store, limit = 40): DecisionLogEntryDto[] {
-  const entries: DecisionLogEntryDto[] = [];
+// ---------------------------------------------------------------------------
+// GET /api/system
+// ---------------------------------------------------------------------------
 
-  for (const event of [...store.events].reverse()) {
-    if (event.type !== 'APPROVED' && event.type !== 'DECLINED') continue;
-    const payload = event.payload as {
-      decision?: Record<string, unknown>;
-      won?: boolean;
-      claimedByAgentName?: string | null;
-    } | null;
-    const decision = payload?.decision as
-      | {
-          agentName: string;
-          decision: 'APPROVE' | 'DECLINE';
-          declineReason: string | null;
-          rationale: string;
-          inputs: Record<string, string | number>;
-          result: Record<string, string | number>;
-          decidedAt: string | Date;
-        }
-      | undefined;
-    if (!decision || !event.jobId) continue;
-
-    const job = store.getJob(event.jobId);
-    if (!job) continue;
-    const creator = store.creators.get(job.creatorId);
-
-    entries.push({
-      jobId: job.id,
-      agentName: decision.agentName,
-      decision: decision.decision,
-      won: payload?.won ?? decision.decision === 'APPROVE',
-      claimedByAgentName: payload?.claimedByAgentName ?? null,
-      declineReason: decision.declineReason,
-      // An agent that approved but lost the auction reasoned its way to "I
-      // would dub this" - which is true, and worth showing - but the log must
-      // not leave a reader thinking it did. The winner's name is appended
-      // rather than the reasoning being rewritten, because the reasoning is real.
-      rationale:
-        decision.decision === 'APPROVE' && payload?.won === false && payload?.claimedByAgentName
-          ? `${decision.rationale} (Outbid: ${payload.claimedByAgentName} won the auction with a lower bid.)`
-          : decision.rationale,
-      math: {
-        predictedViews: Number(decision.inputs.predictedViews ?? 0),
-        conversionPercent: formatPpmPercent(ppm(Number(decision.inputs.conversionPpm ?? 0))).replace('%', ''),
-        pSuccessPercent: formatPpmPercent(ppm(Number(decision.inputs.pSuccessPpm ?? 0))),
-        rPerView: money(micros(BigInt(String(decision.result.rPerViewMicros ?? '0'))), 3),
-        agentTakePerUnlock: money(
-          micros(
-            (BigInt(String(decision.inputs.unlockPriceMicros ?? '0')) *
-              BigInt(Number(decision.inputs.agentBps ?? 0))) /
-              10_000n,
-          ),
-          3,
-        ),
-        unlockPrice: money(micros(BigInt(String(decision.inputs.unlockPriceMicros ?? '0')))),
-        agentSharePercent: `${Number(decision.inputs.agentBps ?? 0) / 100}%`,
-        expectedRevenue: money(
-          micros(BigInt(String(decision.result.expectedRevenueMicros ?? '0'))),
-          3,
-        ),
-        dubCost: money(micros(BigInt(String(decision.inputs.dubCostMicros ?? '0')))),
-        ev: money(micros(BigInt(String(decision.result.evMicros ?? '0'))), 3),
-        minMargin: money(micros(BigInt(String(decision.inputs.minMarginMicros ?? '0')))),
-        confidencePercent: formatPpmPercent(ppm(Number(decision.result.confidencePpm ?? 0))).replace('%', ''),
-        basis: (decision.result.basis as 'bucket' | 'cold_start') ?? 'cold_start',
-      },
-      decidedAt: new Date(decision.decidedAt).toISOString(),
-      creatorHandle: creator?.handle ?? 'unknown',
-      targetLanguageName: languageName(job.targetLang),
-    });
-
-    if (entries.length >= limit) break;
-  }
-
-  return entries;
-}
-
-export function agentSummary(store: Store, agent: Agent): AgentSummaryDto {
-  const jobs = store.jobsForAgent(agent.id);
-  const balance = store.balanceOf(agent.accountId);
-  const spend = store.totalSpend(agent.accountId, 'dub_cost');
-  const revenue = store.totalEarned(agent.accountId, ['agent_share']);
-
-  const finished = jobs.filter((j) =>
-    ['PUBLISHED', 'EARNING', 'SETTLED', 'REJECTED_BY_QC'].includes(j.state),
-  );
-  const published = finished.filter((j) =>
-    ['PUBLISHED', 'EARNING', 'SETTLED'].includes(j.state),
-  ).length;
-
-  const errors = jobs
-    .map((j) => store.getPrediction(j.id))
-    .filter((p): p is PredictionRecord => p !== undefined && p.errorRatio !== null)
-    .map((p) => Math.abs(p.errorRatio as number));
-  const meanError =
-    errors.length > 0 ? (errors.reduce((a, b) => a + b, 0) / errors.length) * 100 : null;
-
-  const roi = roiPpm(revenue, spend);
-
-  return {
-    id: agent.id,
-    name: agent.name,
-    persona: agent.persona,
-    balance: money(balance),
-    lifetimeSpend: money(spend),
-    lifetimeRevenue: money(revenue, 3),
-    profit: money(micros((revenue as bigint) - (spend as bigint)), 3),
-    roiPercent: roi === null ? null : `${(roi / 10_000).toFixed(1)}%`,
-    jobsWon: jobs.length,
-    jobsDeclined: 0,
-    qcPassRate: finished.length === 0 ? 'n/a' : `${Math.round((published / finished.length) * 100)}%`,
-    predictionErrorPercent: meanError === null ? null : `${meanError.toFixed(0)}%`,
-    walletAddress: agent.walletAddress,
-    verifyUrl: agent.walletAddress ? addressUrl(agent.walletAddress) : null,
-  };
-}
-
-export function agentJobRow(store: Store, job: Job): AgentJobRowDto {
-  const creator = store.creators.get(job.creatorId);
-  const unlocks = store.unlocksForJob(job.id);
-  const revenue = unlocks.reduce((sum, u) => sum + (u.agentShare as bigint), 0n);
-  const cost = job.dubCost as bigint;
-  const roi = roiPpm(micros(revenue), micros(cost));
-
-  return {
-    jobId: job.id,
-    creatorHandle: creator?.handle ?? 'unknown',
-    targetLanguageName: languageName(job.targetLang),
-    state: job.state,
-    statusLabel: statusLabel(job.state),
-    cost: money(micros(cost)),
-    revenue: money(micros(revenue), 3),
-    profit: money(micros(revenue - cost), 3),
-    roiPercent: roi === null ? null : `${(roi / 10_000).toFixed(1)}%`,
-    unlocks: unlocks.length,
-    qcPassed: job.qcReport ? job.qcReport.passed : null,
-  };
-}
-
-export function accuracySeries(store: Store): AccuracyPointDto[] {
-  return store.resolvedPredictions().map((p) => ({
-    at: (p.resolvedAt as Date).toISOString(),
-    predicted: p.predictedViews,
-    actual: p.actualViews ?? 0,
-    errorPercent: Math.round((p.errorRatio ?? 0) * 100),
-    simulated: p.simulated,
-  }));
-}
-
-/**
- * The feed line for a settlement. Shares of an unlock are BANKED into the
- * recipient's balance; only a claimed creator payout is "paid out". Saying
- * "paid to @maria" for a share made her dashboard ("Already paid out: $0.00")
- * look wrong when it was right.
- */
-function tickerText(settlement: Settlement, name: string): string {
-  const amount = formatUsd(settlement.amount, {
-    maxDecimals: displayDecimals(settlement.amount, 3),
-  });
-  switch (settlement.kind) {
-    case 'creator_payout':
-      return fill(copy.ticker.paidOut, { amount, name });
-    case 'dub_cost':
-      return fill(copy.ticker.dubCost, { amount });
-    default:
-      return fill(copy.ticker.shareBanked, { amount, name });
-  }
-}
-
-export function tickerFromSettlement(settlement: Settlement, store: Store): TickerEntryDto {
-  const account = store.getAccount(settlement.toAccountId);
-  const verifiable =
-    settlement.status === 'confirmed' && !settlement.simulated && settlement.txHash !== null;
-  return {
-    id: settlement.id,
-    kind: 'settlement',
-    text: tickerText(settlement, account?.label ?? copy.ticker.someone),
-    amount: money(settlement.amount, 3),
-    at: settlement.createdAt.toISOString(),
-    verifyUrl: verifiable ? txUrl(settlement.txHash as string) : null,
-    simulated: settlement.simulated,
-  };
-}
-
-export function tickerFromUnlock(unlock: Unlock, store: Store): TickerEntryDto {
-  const job = store.getJob(unlock.jobId);
-  return {
-    id: unlock.id,
-    kind: 'unlock',
-    text: `Someone unlocked a ${job ? languageName(job.targetLang) : ''} dub`.trim(),
-    amount: money(unlock.amount),
-    at: unlock.createdAt.toISOString(),
-    verifyUrl: unlockTxUrl(unlock),
-    simulated: unlock.simulated,
-  };
-}
-
-export function botPostDto(post: BotPost): BotPostDto {
-  return {
-    id: post.id,
-    authorHandle: post.authorHandle,
-    authorDisplayName: post.authorDisplayName,
-    text: post.text,
-    createdAt: post.createdAt.toISOString(),
-    isBot: post.isBot,
-    inReplyToId: post.inReplyToId,
-    metrics: post.metrics
-      ? {
-          likes: post.metrics.likes,
-          replies: post.metrics.replies,
-          reposts: post.metrics.reposts,
-          views: post.metrics.views,
-        }
-      : null,
-    hasVideo: post.hasVideo,
-    jobId: post.jobId,
-  };
-}
-
-export function systemStatus(store: Store, feed: FeedStatusDto): SystemStatusDto {
+export function systemStatus(store: Store, accounts: boolean, revenueAddress: string | null): SystemStatusDto {
   const config = getConfig();
-  const revenue = [...store.accounts.values()].find((a) => a.kind === 'revenue');
-  const treasury = [...store.accounts.values()].find((a) => a.kind === 'treasury');
-
+  const house = store.houseAccount();
+  const spend = -(store.ledgerTotal(house.id, 'dub_cost') as bigint);
+  const collected = store.ledgerTotal(house.id, 'view_charge') as bigint;
   return {
     demoMode: config.isDemoMode,
-    network: ARC_TESTNET.name,
-    explorerUrl: ARC_TESTNET.explorerUrl,
-    capabilities: config.capabilities,
-    mocked: config.mockedSubsystems,
-    addresses: {
-      usdc: USDC_ADDRESS,
-      gatewayWallet: GATEWAY_WALLET_ADDRESS,
-      revenue: revenue?.walletAddress ?? null,
-      treasury: treasury?.walletAddress ?? null,
+    simulated: config.mockedSubsystems,
+    accounts,
+    pricing: {
+      pricePerThousand: money(micros((PRICE_PER_VIEW as bigint) * 1_000n)),
+      defaultValuePerThousand: money(DEFAULT_VALUE_PER_THOUSAND_VIEWS),
+      dubCostPerMinute: money(ELEVENLABS_PRICE_PER_MINUTE[DUBBING_TIER]),
+      defaultPostBudget: money(DEFAULT_POST_BUDGET),
+      exploreLanguages: EXPLORE_LANGUAGE_COUNT,
+      explorePosts: EXPLORE_POSTS,
+      maxWinners: MAX_WINNERS,
     },
+    chain: {
+      name: ARC_TESTNET.name,
+      explorerUrl: ARC_TESTNET.explorerUrl,
+      usdcAddress: USDC_ADDRESS,
+      revenueAddress,
+      revenueAddressUrl: revenueAddress ? addressUrl(revenueAddress) : null,
+    },
+    house: {
+      dubsMade: [...store.dubs.values()].filter((d) => d.providerJobId !== null).length,
+      dubSpend: money(micros(spend)),
+      collected: money(micros(collected)),
+      net: money(micros(collected - spend)),
+    },
+    creators: [...store.creators.values()]
+      .sort((a, b) => a.handle.localeCompare(b.handle))
+      .map((c) => ({ handle: c.handle, displayName: c.displayName })),
   };
 }

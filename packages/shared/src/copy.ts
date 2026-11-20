@@ -1,8 +1,8 @@
 /**
  * THE VOCABULARY MAP - every user-facing string in Parrot lives here.
  *
- * Non-negotiable product rule: a creator or viewer must be able to finish the
- * whole flow without ever learning that a blockchain was involved. So these
+ * Product rule: a creator or viewer must be able to finish the whole flow
+ * without ever learning that a blockchain was involved. So these
  * words are banned from anything a normal person reads:
  *
  *   wallet -> balance / account        USDC -> dollars
@@ -54,7 +54,6 @@ export const FORBIDDEN_WORDS = [
   'mainnet',
   'faucet',
   'stablecoin',
-  'ledger',
   'settlement',
   'settle',
 ] as const;
@@ -75,162 +74,127 @@ export function fill(template: string, values: Record<string, string | number>):
 export const copy = {
   brand: {
     name: 'Parrot',
-    tagline: 'Watch anything in your language.',
-    creatorTagline: 'Your videos, everywhere, for free.',
+    tagline: 'Get your videos seen in every language.',
+    promise: 'Parrot pays for the dubs. You only pay for the views they bring.',
   },
 
-  viewer: {
-    previewBadge: 'Free preview',
-    previewEndedTitle: 'Want the rest?',
-    previewEndedBody: 'Unlock the full dub and watch it straight through.',
-    unlockCta: 'Unlock for {price}',
-    unlockingCta: 'Unlocking...',
-    unlockedTitle: 'Squawk! You are in.',
-    unlockedBody: 'Enjoy - this one is yours to rewatch any time.',
-    dubbedInto: 'Dubbed into {language}',
-    originalLanguage: 'Originally in {language}',
-    starterCreditTitle: 'Test mode: {amount} free credit',
-    starterCreditBody: 'No real money. This is a demo account we topped up for you.',
-    balanceLabel: 'Your balance',
-    balanceAfter: '{amount} left',
-    rewatchCta: 'Watch again',
-    shareCta: 'Share',
-    shareCopied: 'Link copied',
-    cardSoon: 'Card and Apple Pay coming soon',
-    howItWorksTitle: 'How is this free for the creator?',
-    howItWorksBody:
-      'Parrot pays to dub the video up front and earns it back a few cents at a time. The creator keeps the bigger share.',
-    poweredBy: 'Dubbed by Parrot',
-  },
-
-  creator: {
-    dashboardTitle: 'Your earnings',
-    totalEarned: 'Earned so far',
-    pendingLabel: 'Ready to claim',
-    paidOutLabel: 'Already paid out',
-    perDubViews: '{count} views',
-    perDubUnlocks: '{count} unlocks',
-    perDubEarned: '{amount} earned',
-    claimCta: 'Claim {amount}',
-    claimingCta: 'Sending...',
-    claimedTitle: 'On its way',
-    claimedBody: 'We sent {amount} to your account. It usually lands in a few seconds.',
-    claimEmptyTitle: 'Nothing to claim yet',
-    claimEmptyBody: 'As soon as someone unlocks one of your dubs, your earnings show up here.',
-    signInPrompt: 'Sign in to claim',
-    signInBody: 'Use the account you posted from, or an email. It takes one tap.',
-    earningsWaiting: 'We are holding {amount} for you.',
-    explainerTitle: 'How you get paid',
-    explainerBody:
-      'Parrot covers the cost of dubbing your video. Every time someone unlocks the dub, you keep {creatorShare} of what they pay.',
-    noDubsTitle: 'No dubs yet',
-    noDubsBody: 'Reply to one of your posts with "{mention} dub this to Spanish" to get started.',
-  },
-
+  /** What Parrot says in replies under a post. */
   bot: {
     mention: '@parrot',
-    acceptedReply:
-      'Squawk! On it - dubbing this into {language} now. Your link lands here in about a minute.',
-    publishedReply: 'Your {language} dub is live -> {link} - you earn every time someone watches it.',
-    duplicateReply: 'Already dubbed this one into {language} -> {link} - share away.',
-    declinedReply:
-      'Passing on this one for now: {reason} Reply again once that changes and I will take another look.',
-    declineReasonLowSignal: 'not enough interest yet to cover the cost of dubbing it.',
-    declineReasonTooLong: 'the clip is longer than I can afford to dub right now.',
-    declineReasonBudget: 'I am low on funds today and keeping a reserve.',
+    planReply:
+      'On it. Dubbing this into {languages}. Each one lands right here in this thread when it is ready.',
+    singleReply: 'On it. Dubbing this into {language}. It lands right here when it is ready.',
+    dubPost: '{flag} {nativeName} ({language}) - dubbed by Parrot. Watch: {link}',
+    duplicateReply: 'Already dubbed this one into {language} -> {link}',
+    declinedReply: 'I cannot dub this one: {reason}',
+    declineReasonTooLong: 'the clip is longer than I can dub right now.',
+    declineReasonTooShort: 'the clip is too short to dub.',
     declineReasonNoVideo: 'I could not find a video in that post.',
     declineReasonNotAuthor: 'only the person who posted the video can ask me to dub it.',
     declineReasonUnsupportedLanguage: 'I cannot dub into that language yet.',
+    declineReasonNoBalance: 'your Parrot balance is empty. Add funds and ask me again.',
+    declineReasonAlreadyDubbed: 'it is already dubbed into every language I would pick.',
     qcFailedReply:
-      'The dub did not come out well enough to publish, so I scrapped it. No cost to you - I will try again if you ask.',
-    firstUnlockReply: 'Someone just watched your {language} dub. You earned {amount}.',
-    dailySummaryReply: 'Your {language} dub earned {amount} from {count} viewers today.',
-    statusReply: 'That one is {status}. {detail}',
+      'The {language} dub did not come out well enough to publish, so I scrapped it. That one is on me, not you.',
+    failedReply: 'The {language} dub did not finish. Nothing was charged to you.',
     errorReply: 'Something went wrong on my end. Try me again in a minute.',
     rateLimitedReply: 'I am a bit swamped right now - give me a few minutes and ask again.',
   },
 
+  /** One dub's state, as a creator reads it. */
   status: {
-    requested: 'just came in',
-    parsed: 'being read',
-    evaluating: 'being weighed up',
-    declined: 'passed on',
-    approved: 'approved',
-    dubbing: 'being dubbed',
-    qc: 'in final checks',
-    rejectedByQc: 'scrapped in checks',
-    published: 'live',
-    earning: 'live and earning',
-    settled: 'paid out',
-    failed: 'stalled',
+    queued: 'Waiting',
+    dubbing: 'Dubbing',
+    qc: 'Checking quality',
+    published: 'Live',
+    rejectedByQc: 'Scrapped',
+    failed: 'Did not finish',
   },
 
-  receipt: {
-    drawerTitle: 'Receipt',
-    unlockPaid: 'Unlock paid',
-    unlockPaidDetail: 'You paid {amount} to watch this in {language}.',
-    creatorSharePaid: 'Creator share sent',
-    creatorSharePaidDetail: '{amount} went to {handle}.',
-    parrotSharePaid: 'Parrot share',
-    parrotSharePaidDetail: '{amount} went back to Parrot to cover the dub.',
-    payoutSent: 'Payout sent',
-    payoutSentDetail: '{amount} sent to your account.',
-    dubCost: 'Dubbing cost',
-    dubCostDetail: 'Parrot paid {amount} to dub this video.',
-    pending: 'Sending...',
-    timestamp: 'on {date}',
+  /** Where a language stands for a creator. */
+  language: {
+    winner: 'Proven',
+    testing: 'Testing',
+    untested: 'Not tried',
+    dropped: 'Dropped',
+    roleWinner: 'Proven',
+    roleTest: 'Trying',
+    roleExplore: 'Exploring',
+    modeExplore: 'Learning your audience',
+    modeFocus: 'Dubbing what works',
+  },
+
+  /** Quality checks, by name. */
+  qc: {
+    duration_match: 'Same length as the original',
+    language_detect: 'Spoken in the right language',
+    audio_sanity: 'Clear, steady sound',
+    back_translation: 'Says the same thing as the original',
+    passed: 'Passed',
+    failed: 'Failed',
+    skipped: 'Not checked',
+  },
+
+  payment: {
+    title: 'Paid for {views} views',
+    detail: '{views} new views across {languages} at {price} per 1,000.',
+    pending: 'Sending',
+    confirmed: 'Paid',
+    failed: 'Did not go through',
     verifyLink: 'Verify on Arc',
-    verifyHint: 'Opens a public record of this payment.',
+    testModeNote: 'Test mode. No real money moved.',
+    demoBalanceNote: 'Demo balance. Sign in to pay from your own account.',
+    simulatedViewsNote: 'For views generated by the demo audience.',
   },
 
-  /** One line per money movement in the live feed on the P&L page. */
-  ticker: {
-    /** A share of unlock money moved into someone's balance - not a payout. */
-    shareBanked: '{amount} banked for {name}',
-    /** Money actually sent out to a creator who claimed it. */
-    paidOut: '{amount} paid out to {name}',
-    dubCost: 'Parrot spent {amount} on a dub',
-    someone: 'an account',
+  warnings: {
+    lowBalance: 'Your balance is too low to cover new views. Add funds to keep your dubs counting.',
+    valueBelowPrice:
+      'At your rate a view is worth less than it costs ({value} against {price} per 1,000 views). Every dubbed view would lose you money.',
+    budgetReached: 'This post reached its budget. Its dubs stay up and further views are free.',
   },
 
   errors: {
     genericTitle: 'That did not work',
     genericBody: 'Give it another try. If it keeps happening, it is on us, not you.',
-    retryCta: 'Try again',
-    backCta: 'Go back',
-    paymentFailedTitle: 'The unlock did not go through',
-    paymentFailedBody: 'You have not been charged. Tap to try once more.',
-    insufficientBalanceTitle: 'Not enough credit',
-    insufficientBalanceBody: 'Your test credit has run out. In the real thing you would top up here.',
-    dubUnavailableTitle: 'This dub is not ready',
-    dubUnavailableBody: 'It may still be rendering, or it did not pass our quality checks.',
+    notFoundTitle: 'We cannot find that',
+    notFoundBody: 'The link may be wrong, or it may have been taken down.',
     dubNotFoundTitle: 'We cannot find that dub',
     dubNotFoundBody: 'The link may be wrong, or the dub may have been taken down.',
-    dubbingFailedTitle: 'The dub did not come out right',
-    dubbingFailedBody:
-      'We scrapped it rather than publish something bad. Nothing was charged to the creator.',
-    videoSourceTitle: 'We could not read that post',
-    videoSourceBody: 'Check that the post is public and has a video in it.',
-    offlineTitle: 'You are offline',
-    offlineBody: 'Reconnect and we will pick up where you left off.',
-    sourceUnavailableTitle: 'We cannot reach that service right now',
-    sourceUnavailableBody: 'It is a temporary outage. We will keep trying in the background.',
-    notSignedInTitle: 'Sign in to see this',
-    notSignedInBody: 'One tap with your email or the account you posted from.',
+    dubUnavailableTitle: 'This dub is not ready',
+    dubUnavailableBody: 'It may still be rendering, or it did not pass our quality checks.',
+    notSignedInTitle: 'Sign in to do that',
+    notSignedInBody: 'This page belongs to someone. Sign in as them to change it.',
+    notYoursTitle: 'This is not your page',
+    notYoursBody: 'Only the creator can change these settings.',
+    badAmountTitle: 'Check that amount',
+    badAmountBody: 'Use a plain dollar amount, like 8 or 2.50.',
+    noVideoTitle: 'There is no video in that post',
+    noVideoBody: 'Parrot can only dub a post that has a video.',
+    declinedTitle: 'Parrot cannot dub this one',
+    handleTakenTitle: 'That name is taken',
+    handleTakenBody: 'Someone else has already connected it. Pick the name you post under.',
+    badHandleTitle: 'Check that name',
+    badHandleBody: 'Use the name you post under: letters, numbers and underscores, up to 15.',
+    demoClosedTitle: 'Not available here',
+    demoClosedBody: 'The demo controls are switched off on this server.',
+    rateLimitedTitle: 'One moment',
+    rateLimitedBody: 'That is a lot very quickly. Give it a few seconds and try again.',
   },
 
   extension: {
     name: 'Parrot',
     tagline: 'Dubs for the videos in your timeline.',
     watchPrefix: 'Also in',
-    watchChipTitle: 'Watch in {language}. A short preview is free, then {price} to keep watching.',
+    watchChipTitle: 'Watch in {language}. Free.',
     dubCta: 'Dub this',
     dubCtaAnother: 'Dub to another language',
     menuTitle: 'Dub this video to',
-    menuNote: 'Free for you. Parrot covers the cost and you keep {creatorPercent}% of what it earns.',
+    menuAuto: 'Let Parrot choose',
+    menuNote: 'Parrot pays for the dub. You only pay for the views it brings.',
     menuEmpty: 'This video has been requested in every language Parrot speaks.',
     typing: 'Asking Parrot under your post...',
-    pending: 'Parrot is weighing it up...',
+    pending: 'Parrot is working on it...',
     replyPrefix: 'Parrot',
     composerFailed: 'Could not open the reply box. Reply to your post with: {request}',
     offline: 'Parrot cannot be reached right now.',
@@ -241,7 +205,7 @@ export const copy = {
     popupSaved: 'Saved.',
     popupTestMode: 'Test mode. Standing in for the real thing right now:',
     popupAllReal: 'Everything is running for real.',
-    popupDashboard: 'See how Parrot decides',
+    popupDashboard: 'Open Parrot',
     popupActiveOn: 'Active on',
     notDubbedYet: 'No dub yet',
     pageSourceNote: 'On X, Parrot reads the likes and views from this page. It cannot check them.',
@@ -251,33 +215,29 @@ export const copy = {
 
   demo: {
     badge: 'Test mode',
-    simulatedBadge: 'Simulated traffic',
-    simulatedNote:
-      'These viewers are generated for the demo. The payments they make are real test-mode payments.',
-    seedCta: 'Seed demo data',
-    startTrafficCta: 'Start simulated traffic',
-    stopTrafficCta: 'Stop simulated traffic',
-    compressedTimeNote: 'Demo mode: a day of results is compressed into a minute.',
+    simulatedBadge: 'Simulated',
+    audienceCta: 'Send a demo audience',
+    audienceRunning: 'Audience arriving...',
+    audienceNote:
+      'A demo audience is generated so you can see the numbers move. Those views are labelled simulated.',
   },
 } as const;
 
 /**
- * Judges-only and receipt-footer strings. EXEMPT from the forbidden-word test by
- * design, and never rendered on the viewer, creator, or bot surfaces. The
- * "Under the hood" page exists so technically-minded people can check our work.
+ * Judges-only strings. EXEMPT from the forbidden-word test by design, and never
+ * rendered on the creator, viewer or bot surfaces. The "Under the hood" page
+ * exists so technically-minded people can check our work.
  */
 export const technicalCopy = {
   underTheHoodTitle: 'Under the hood',
   underTheHoodSubtitle: 'For judges and the curious: exactly what is on-chain and what is not.',
   chainLabel: 'Arc testnet',
   explorerCta: 'Open in the Arc explorer',
-  latestBlock: 'Latest block',
-  streamLive: 'QuickNode Stream live',
-  streamStale: 'QuickNode Stream stale - falling back to polling',
-  gatewayBatched: 'Unlocks are batched off-chain by Circle Gateway, then settled on-chain.',
   offChainCostNote:
-    'The ElevenLabs dubbing bill is paid off-chain in fiat and mirrored as a ledger debit.',
-  custodialNote: 'Test-mode accounts are custodial: keys are held by the Parrot backend.',
+    'The ElevenLabs dubbing bill is paid off-chain in fiat and recorded as a cost against Parrot.',
+  custodialNote:
+    'Accounts are custodial in test mode: each creator gets an Arc wallet whose key Parrot holds, encrypted.',
+  gasNote: 'Arc charges network fees in USDC, so a creator holds one balance and it covers everything.',
 } as const;
 
 export type Copy = typeof copy;

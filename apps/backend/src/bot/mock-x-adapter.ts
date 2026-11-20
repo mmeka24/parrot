@@ -3,8 +3,8 @@
  * project and, per x-adapter.ts, every real call is billed against prepaid
  * credits with link-bearing replies at $0.200 each.
  *
- * It is backed by the Store's `botPosts`, so the bot console in the web app
- * renders the same timeline the bot is reading and writing. Nothing here calls
+ * It is backed by the Store's `botPosts`, so the stand-in timeline (apps/x-clone)
+ * shows the same posts the bot is reading and writing. Nothing here calls
  * the network.
  *
  * Determinism is a hard requirement: a demo must replay identically. So ids are
@@ -13,13 +13,13 @@
  * identical timelines.
  *
  * Replies are recorded as posts with `posted: false` - they exist in our
- * timeline, they were never sent to X. The dashboard reads that flag.
+ * timeline, they were never sent to X.
  */
 
 import { mentionSchema, sourcePostSchema, type Mention, type SourcePost } from '@parrot/shared';
 import type { Store } from '../store/store.js';
 import type { BotPost } from '../store/types.js';
-import type { PostedReply, XAdapter } from './x-adapter.js';
+import type { PostReply, PostedReply, XAdapter } from './x-adapter.js';
 
 /** Fixed clock origin, so a replayed demo is byte-identical. 2026-11-15T12:00:00Z. */
 export const MOCK_EPOCH_MS = Date.UTC(2026, 10, 15, 12, 0, 0);
@@ -43,7 +43,7 @@ export interface MockSeedPost {
   readonly metrics: { likes: number; replies: number; reposts: number; quotes: number; views: number };
 }
 
-/** The creators the demo ships with. @maria is the brief's worked example. */
+/** The creators the demo ships with. */
 export const MOCK_USERS: readonly MockXUser[] = [
   { handle: 'maria', displayName: 'Maria Lopez', xUserId: 'x-user-maria', followers: 50_000 },
   { handle: 'devtoni', displayName: 'Toni Okafor', xUserId: 'x-user-devtoni', followers: 12_400 },
@@ -52,10 +52,13 @@ export const MOCK_USERS: readonly MockXUser[] = [
 ];
 
 /**
- * Seeded video posts. The first is the worked example: @maria, a 30s clip that
- * went viral - 1.2M views, 50k followers. Through the sourced funnel in
- * predictor.ts that is ~2,400 likely Spanish viewers. A 2-cent dub needs
- * reach like this to pay back; the small posts below are there to be declined.
+ * Seeded video posts, oldest first. They have a length and an audience but no
+ * media behind them, so their dubs are always the simulated stand-in.
+ *
+ * @maria has three: the demo dubs the first two on boot (so there is something
+ * learned to show) and leaves the third for a person to dub. @devtoni is a
+ * creator Parrot knows nothing about yet. One of @chefkenji's dubs is made to
+ * fail the quality check, so the loss path is visible.
  */
 export const MOCK_SEED_POSTS: readonly MockSeedPost[] = [
   {
@@ -65,22 +68,34 @@ export const MOCK_SEED_POSTS: readonly MockSeedPost[] = [
     metrics: { likes: 18_000, replies: 640, reposts: 2_900, quotes: 210, views: 1_200_000 },
   },
   {
-    handle: 'devtoni',
-    text: 'Debugging a race condition live, in under two minutes.',
-    durationS: 95,
-    metrics: { likes: 240, replies: 31, reposts: 44, quotes: 6, views: 3_200 },
-  },
-  {
     handle: 'chefkenji',
     text: 'Knife skills: the grip everyone gets wrong.',
     durationS: 48,
     metrics: { likes: 52_000, replies: 1_900, reposts: 9_800, quotes: 600, views: 2_400_000 },
   },
   {
+    handle: 'maria',
+    text: 'Five dollars, four meals. Here is the whole shop.',
+    durationS: 30,
+    metrics: { likes: 11_400, replies: 410, reposts: 1_800, quotes: 120, views: 800_000 },
+  },
+  {
+    handle: 'devtoni',
+    text: 'Debugging a race condition live, in under two minutes.',
+    durationS: 95,
+    metrics: { likes: 41_000, replies: 1_300, reposts: 6_200, quotes: 380, views: 2_100_000 },
+  },
+  {
     handle: 'linafit',
     text: 'Three minutes, no equipment, actually works.',
     durationS: 170,
     metrics: { likes: 90, replies: 7, reposts: 11, quotes: 1, views: 640 },
+  },
+  {
+    handle: 'maria',
+    text: 'Stop throwing away the pasta water. Thirty seconds on why.',
+    durationS: 30,
+    metrics: { likes: 9_800, replies: 350, reposts: 1_500, quotes: 95, views: 650_000 },
   },
 ];
 
@@ -107,6 +122,18 @@ export interface CreateClonePostInput {
   readonly video?: { readonly durationS: number; readonly path: string | null } | null;
   /** Demo-only starting metrics for a top-level post (see simulatedViews). */
   readonly metrics?: { likes: number; replies: number; reposts: number; quotes: number; views: number } | null;
+  /** For an account that does not exist yet: the name to show for it. */
+  readonly displayName?: string;
+}
+
+/** One of Parrot's dubs, posted in the thread under the original. */
+export interface PostDubInput {
+  readonly inReplyToId: string;
+  readonly text: string;
+  readonly dubId: string;
+  readonly durationS: number;
+  /** The rendered dub. Null for a simulated stand-in with nothing to play. */
+  readonly videoPath: string | null;
 }
 
 export class MockXAdapter implements XAdapter {
@@ -191,7 +218,7 @@ export class MockXAdapter implements XAdapter {
 
   /**
    * Record the bot's reply. `posted: false` is the honest part: in mock mode
-   * nothing is sent to X, and the console renders it as a local reply.
+   * nothing is sent to X.
    */
   reply(inReplyToId: string, text: string): Promise<PostedReply> {
     const parent = this.store.botPosts.get(inReplyToId) ?? null;
@@ -206,18 +233,70 @@ export class MockXAdapter implements XAdapter {
       metrics: null,
       hasVideo: false,
       videoDurationS: null,
-      jobId: null,
+      dubId: null,
       posted: false,
     });
     return Promise.resolve({ id: post.id, text, inReplyToId, posted: false });
   }
 
-  // -------------------------------------------------------------------------
-  // Console controls (not part of XAdapter - mock only)
-  // -------------------------------------------------------------------------
+  /** Everything written directly under a post, oldest first. */
+  listReplies(postId: string): Promise<PostReply[]> {
+    const replies = [...this.store.botPosts.values()]
+      .filter((p) => p.inReplyToId === postId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+      .map((p) => ({ id: p.id, text: p.text, authorHandle: p.authorHandle }));
+    return Promise.resolve(replies);
+  }
 
   /**
-   * Inject a mention, as the bot console does. `authorHandle` defaults to the
+   * Post a dub in the thread under the original, as a video reply from the bot.
+   * It starts at zero views like any other post, and is counted from there.
+   */
+  postDub(input: PostDubInput): Promise<PostedReply> {
+    const parent = this.store.botPosts.get(input.inReplyToId) ?? null;
+    const post = this.writePost({
+      authorHandle: this.botHandle,
+      authorDisplayName: 'Parrot',
+      authorXUserId: this.botUserId,
+      text: input.text,
+      isBot: true,
+      inReplyToId: input.inReplyToId,
+      parentAuthorXUserId: parent?.authorXUserId ?? null,
+      metrics: { likes: 0, replies: 0, reposts: 0, quotes: 0, views: 0 },
+      hasVideo: true,
+      videoDurationS: input.durationS,
+      videoPath: input.videoPath,
+      dubId: input.dubId,
+      posted: false,
+    });
+    if (parent?.metrics) parent.metrics.replies += 1;
+    return Promise.resolve({ id: post.id, text: input.text, inReplyToId: input.inReplyToId, posted: false });
+  }
+
+  // -------------------------------------------------------------------------
+  // Stand-in controls (not part of XAdapter - mock only)
+  // -------------------------------------------------------------------------
+
+  /** Count views on a post, as the timeline itself would. Returns the new total. */
+  addViews(postId: string, count: number): number {
+    const post = this.store.botPosts.get(postId);
+    if (!post) return 0;
+    post.metrics ??= { likes: 0, replies: 0, reposts: 0, quotes: 0, views: 0 };
+    post.metrics.views = (post.metrics.views ?? 0) + Math.max(0, Math.floor(count));
+    return post.metrics.views;
+  }
+
+  /** Add likes and reposts to a post, for the demo audience. */
+  addEngagement(postId: string, likes: number, reposts: number): void {
+    const post = this.store.botPosts.get(postId);
+    if (!post) return;
+    post.metrics ??= { likes: 0, replies: 0, reposts: 0, quotes: 0, views: 0 };
+    post.metrics.likes += Math.max(0, Math.floor(likes));
+    post.metrics.reposts += Math.max(0, Math.floor(reposts));
+  }
+
+  /**
+   * Inject a mention, as the stand-in's composer does. `authorHandle` defaults to the
    * author of the post being replied to, which is the normal case: a creator
    * replying under their own video.
    */
@@ -225,7 +304,6 @@ export class MockXAdapter implements XAdapter {
     text: string;
     inReplyToPostId?: string | null;
     authorHandle?: string;
-    jobId?: string | null;
   }): Mention {
     const parent = input.inReplyToPostId
       ? (this.store.botPosts.get(input.inReplyToPostId) ?? null)
@@ -244,7 +322,7 @@ export class MockXAdapter implements XAdapter {
       metrics: null,
       hasVideo: false,
       videoDurationS: null,
-      jobId: input.jobId ?? null,
+      dubId: null,
       posted: false,
     });
 
@@ -271,7 +349,7 @@ export class MockXAdapter implements XAdapter {
     const parent = input.inReplyToPostId
       ? (this.store.botPosts.get(input.inReplyToPostId) ?? null)
       : null;
-    const user = this.userFor(input.authorHandle) ?? this.registerUser(input.authorHandle);
+    const user = this.userFor(input.authorHandle) ?? this.registerUser(input.authorHandle, input.displayName);
     const video = input.video ?? null;
     return this.writePost({
       authorHandle: user.handle,
@@ -281,15 +359,15 @@ export class MockXAdapter implements XAdapter {
       isBot: false,
       inReplyToId: parent?.id ?? null,
       parentAuthorXUserId: parent?.authorXUserId ?? null,
-      // Top-level posts start with real zeroes; replies carry no metrics, the
-      // same as every other reply in this store.
+      // Top-level posts start with real zeroes; ordinary replies carry no
+      // metrics.
       metrics: parent
         ? null
         : (input.metrics ?? { likes: 0, replies: 0, reposts: 0, quotes: 0, views: 0 }),
       hasVideo: video !== null,
       videoDurationS: video?.durationS ?? null,
       videoPath: video?.path ?? null,
-      jobId: null,
+      dubId: null,
       posted: false,
     });
   }
@@ -348,17 +426,17 @@ export class MockXAdapter implements XAdapter {
         },
         hasVideo: true,
         videoDurationS: seed.durationS,
-        jobId: null,
+        dubId: null,
         posted: false,
       });
     }
   }
 
-  private registerUser(handle: string): MockXUser {
+  private registerUser(handle: string, displayName?: string): MockXUser {
     const clean = handle.toLowerCase().replace(/^@/, '');
     const user: MockXUser = {
       handle: clean,
-      displayName: clean,
+      displayName: displayName?.trim() || clean,
       xUserId: `x-user-${clean}`,
       followers: 1_000,
     };

@@ -1,20 +1,16 @@
 /**
  * Strings this app needed that do not exist in `@parrot/shared`'s `copy` map.
  *
- * These are navigation labels, dashboard column headings and landing-page
- * copy — all of them user-facing, all of them written to the same vocabulary
- * rule as copy.ts. They live here so they are easy to lift into copy.ts in one
- * move; nothing in this file may contain a forbidden word.
+ * Navigation labels and sign-in copy: all of them user-facing, all of them
+ * written to the same vocabulary rule as copy.ts. Nothing in this file may
+ * contain a forbidden word.
  */
 
 export const localCopy = {
   nav: {
     home: 'Home',
-    watch: 'Watch a dub',
-    agents: 'Agent P&L',
-    creator: 'Creator',
-    leaderboard: 'Leaderboard',
-    console: 'Bot console',
+    dashboard: 'My dashboard',
+    demo: 'Demo creators',
     underTheHood: 'Under the hood',
     extension: 'Get the extension',
     menu: 'Menu',
@@ -26,7 +22,7 @@ export const localCopy = {
     signIn: 'Sign in',
     signOut: 'Sign out',
     signInTitle: 'Sign in to Parrot',
-    signInIntro: 'One tap and you are in. A new account starts with {bonus} to watch dubs.',
+    signInIntro: 'One tap and you are in. A new account starts with {bonus} to pay for your first views.',
     google: 'Continue with Google',
     or: 'or',
     emailLabel: 'Email',
@@ -46,152 +42,14 @@ export const localCopy = {
     googleFailed: 'Google sign-in did not work. Try again, or use email.',
     googleUnavailable: 'Google sign-in is not set up yet. Use email instead.',
     unavailable: 'Sign-in is not available right now.',
-    needsSignInTitle: 'Sign in to unlock',
-    needsSignInBody: 'Sign in with Google or your email. A new account starts with {bonus} to watch dubs.',
-    needsSignInCta: 'Sign in to unlock',
     balance: 'Balance',
     settingUp: 'Setting up your balance...',
-  },
-
-  home: {
-    eyebrow: 'For creators',
-    heroTitle: 'Your video. Every language. Nothing to pay.',
-    heroBody:
-      'Tag Parrot under your post and it dubs the clip, puts it online, and pays you every time someone watches it in their own language.',
-    heroCtaPrimary: 'See a dub',
-    heroCtaSecondary: 'See what Parrot earned',
-    step1Title: 'Tag the bird',
-    step1Body: 'Reply to your own post with "@parrot dub this to Spanish". That is the whole ask.',
-    step2Title: 'Parrot does the maths',
-    step2Body:
-      'It works out how many people would watch in that language and whether that beats the cost of dubbing. If it does not, it tells you why instead of wasting your time.',
-    step3Title: 'You get paid',
-    step3Body:
-      'Parrot covers the dubbing bill up front. Viewers pay two cents to unlock, you keep 60 cents of every dollar, and it lands in your account.',
-    proofTitle: 'A real run',
-    proofBody:
-      'One 30-second clip, dubbed into Spanish for $0.40. 1,840 people watched, 247 unlocked it. Maya earned $2.96, Parrot made $1.58 back.',
-    proofCta: 'Open the receipts',
-    riskTitle: 'The risk is ours',
-    riskBody:
-      'If a dub comes out badly we scrap it and eat the cost. You are never billed, and you never owe anything.',
-    footerNote: 'A demo built for a hackathon. Everything here runs in test mode.',
-  },
-
-  dub: {
-    playPreview: 'Play free preview',
-    playFull: 'Play',
-    pause: 'Pause',
-    previewProgress: 'Preview {seconds}s',
-    watchingIn: 'Watching in {language}',
-    viewsLabel: '{count} views',
-    unlocksLabel: '{count} unlocks',
-    creatorPrefix: 'From',
-    receiptsToggle: 'Receipts',
-    receiptsHint: 'Every cent of this, itemised.',
-    notReadyBadge: 'Not available',
-    stillDubbingTitle: 'This one is still being made',
-    stillDubbingBody: 'Check back in a minute and it should be here.',
-    mediaErrorTitle: 'The video will not play here',
-    mediaErrorBody: 'Your connection may be blocking it. The rest of the page still works.',
-    shareTitle: 'Share this dub',
-    languageChipLabel: 'Language',
-    moreDubs: 'Other dubs to try',
-  },
-
-  dashboard: {
-    agentsTitle: 'What the bird earned',
-    agentsSubtitle: 'Every bet Parrot placed, what it cost, and what came back.',
-    balance: 'Balance',
-    spend: 'Spent',
-    revenue: 'Brought in',
-    profit: 'Profit',
-    roi: 'Return',
-    unlocks: 'Unlocks',
-    published: 'Dubs live',
-    rejected: 'Dubs scrapped',
-    jobsTitle: 'Job by job',
-    jobsSubtitle: 'Cost against revenue for every clip Parrot took on.',
-    colJob: 'Dub',
-    colCreator: 'Creator',
-    colLanguage: 'Language',
-    colStatus: 'Status',
-    colCost: 'Cost',
-    colRevenue: 'Revenue',
-    colProfit: 'Profit',
-    colRoi: 'Return',
-    colUnlocks: 'Unlocks',
-    decisionsTitle: 'Why it said yes or no',
-    decisionsSubtitle: 'The same maths the bird runs, in plain words.',
-    approved: 'Dubbed it',
-    /** Said yes, but another bird claimed the job first. */
-    outbid: 'Wanted it',
-    declined: 'Passed',
-    tickerTitle: 'Happening now',
-    liveLabel: 'Live',
-    staleLabel: 'Catching up',
-    pausedLabel: 'Demo feed',
-    accuracyTitle: 'How good its guesses are',
-    accuracySubtitle: 'Predicted views against what actually happened. Lower gap is better.',
-    predictedLegend: 'Predicted',
-    actualLegend: 'Actual',
-    agentsRosterTitle: 'The birds',
-    jobsWon: 'Dubs taken',
-    jobsDeclined: 'Passed on',
-    qcPassRate: 'Quality pass rate',
-    predictionError: 'Typical miss',
-    emptyTickerTitle: 'Nothing moving yet',
-    emptyTickerBody: 'Unlocks and payouts show up here the moment they happen.',
-    verifyLabel: 'Verify on Arc',
-  },
-
-  leaderboard: {
-    title: 'The leaderboard',
-    subtitle: 'Three birds, one pot of money, different nerve.',
-    rank: 'Rank',
-    agent: 'Bird',
-    winRate: 'Hit rate',
-    winRateHint: 'Share of dubs that passed checks and went live.',
-    errorHint: 'Average gap between predicted and actual views.',
-    leaderBadge: 'Ahead',
-  },
-
-  creator: {
-    backToDubs: 'Your dubs',
-    colDub: 'Dub',
-    colViews: 'Views',
-    colUnlocks: 'Unlocks',
-    colEarned: 'Earned',
-    colStatus: 'Status',
-    viewDub: 'Open',
-    receiptsTitle: 'Your receipts',
-    shareHint: 'Share the link and the earnings follow.',
-  },
-
-  console: {
-    title: 'Bot console',
-    subtitle: 'A stand-in timeline so you can watch Parrot answer without leaving the demo.',
-    simulationNotice: 'Simulation. These posts are not real and nothing is sent anywhere.',
-    inputLabel: 'Write a mention',
-    inputPlaceholder: '@parrot dub this to Spanish',
-    sendCta: 'Post it',
-    sendingCta: 'Posting...',
-    botLabel: 'Parrot',
-    replyingTo: 'Replying to {handle}',
-    openDub: 'Open the dub',
-    emptyTitle: 'Nothing here yet',
-    emptyBody: 'Post a mention above and Parrot will answer.',
-    hintTitle: 'Try one of these',
-    videoBadge: 'Video',
-    likes: 'likes',
-    replies: 'replies',
-    reposts: 'reposts',
-    views: 'views',
   },
 
   shell: {
     simulatedBannerTitle: 'What is simulated right now',
     simulatedBannerDismiss: 'Got it',
-    footerTagline: 'Watch anything in your language.',
+    footerTagline: 'Get your videos seen in every language.',
+    footerNote: 'Built for UBC 26. Test mode: no real money moves.',
   },
 } as const;

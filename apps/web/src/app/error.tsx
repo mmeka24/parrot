@@ -9,7 +9,7 @@ export default function ErrorBoundary({ reset }: { error: Error; reset: () => vo
       <p style={{ color: 'var(--ink-soft)' }}>{copy.errors.genericBody}</p>
       <div>
         <button type="button" className="btn btn-primary" onClick={reset}>
-          {copy.errors.retryCta}
+          Try again
         </button>
       </div>
     </section>

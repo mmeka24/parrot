@@ -28,13 +28,19 @@ export function AccountChip() {
       <span className="chip chip-teal" title={me?.email} aria-live="polite">
         {me?.balance ? me.balance.display : localCopy.account.settingUp}
       </span>
-      <span className="desktop-only" style={{ fontSize: '0.85rem', color: 'var(--ink-soft)' }}>
-        {name}
-      </span>
+      {me?.creatorHandle ? (
+        <Link className="btn btn-ghost desktop-only" style={{ padding: '0.35rem 0.6rem' }} href={`/creator/${me.creatorHandle}`}>
+          @{me.creatorHandle}
+        </Link>
+      ) : (
+        <span className="desktop-only" style={{ fontSize: '0.85rem', color: 'var(--ink-soft)' }}>
+          {name}
+        </span>
+      )}
       <button type="button" className="btn btn-ghost" style={{ padding: '0.35rem 0.6rem' }} onClick={() => void signOut()}>
         {localCopy.account.signOut}
       </button>
-      <style>{`.desktop-only{display:none}@media(min-width:860px){.desktop-only{display:inline}}`}</style>
+      <style>{`.desktop-only{display:none}@media(min-width:860px){.desktop-only{display:inline-flex}}`}</style>
     </span>
   );
 }

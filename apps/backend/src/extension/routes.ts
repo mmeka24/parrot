@@ -12,19 +12,19 @@
  * there is nothing to resolve against and no bot reading replies. The page is
  * the only source, so the extension reports what it reads (/observe) and asks
  * directly (/request). That data is UNVERIFIED - the person viewing a page can
- * edit it - and it is labelled `source: 'page'` all the way to the strip. Two
- * things still bound the damage a forged page can do: the agents' own spend
- * caps (per job, per day), and the fact that every number feeds the same EV
- * model, which still has to clear its margin.
+ * edit it - and it is labelled `source: 'page'` all the way to the strip. What
+ * bounds the damage a forged page can do: Parrot's own daily spend cap, and the
+ * fact that a creator is only ever charged for views that are counted here,
+ * never for numbers a page claimed.
  */
 
 import type { Express } from 'express';
 import { z } from 'zod';
 import {
-  DEFAULT_SPLIT_CREATOR_BPS,
+  PRICE_PER_VIEW,
   SUPPORTED_LANGUAGES,
-  UNLOCK_PRICE,
   isPublished,
+  micros,
   languageName,
   mentionsHandle,
   type ApiErrorDto,
@@ -37,7 +37,8 @@ import {
 import type { Store } from '../store/store.js';
 import type { ObservedPost } from '../store/types.js';
 import type { XAdapter } from '../bot/x-adapter.js';
-import { money, statusLabel } from '../api/mappers.js';
+import { money } from '../api/mappers.js';
+import { statusPhrase } from '../bot/bot-service.js';
 import { getConfig } from '../config.js';
 
 export interface ExtensionDeps {
@@ -45,10 +46,11 @@ export interface ExtensionDeps {
   adapter: XAdapter;
   botHandle: string;
   /**
-   * Run the real pipeline for a page-read x.com post. Resolves with what Parrot
-   * would have replied. Omitted where x.com requests are not wanted (tests).
+   * Order dubs for a page-read x.com post. `targetLang` null lets Parrot choose.
+   * Resolves with what Parrot would have replied. Omitted where x.com requests
+   * are not wanted (tests).
    */
-  dubObservedPost?: (post: ObservedPost, targetLang: string) => Promise<string>;
+  dubObservedPost?: (post: ObservedPost, targetLang: string | null) => Promise<string>;
 }
 
 const handleSchema = z
@@ -79,7 +81,7 @@ const observeSchema = z.object({ posts: z.array(z.unknown()).max(50) });
 
 const requestSchema = z.object({
   postId: z.string().regex(/^[0-9]{1,25}$/),
-  languageCode: z.string(),
+  languageCode: z.string().nullish(),
   requesterHandle: handleSchema,
 });
 
@@ -109,8 +111,7 @@ export function registerExtensionRoutes(app: Express, deps: ExtensionDeps): void
         code: l.code,
         englishName: l.englishName,
       })),
-      unlockPrice: money(UNLOCK_PRICE),
-      creatorPercent: DEFAULT_SPLIT_CREATOR_BPS / 100,
+      pricePerThousand: money(micros((PRICE_PER_VIEW as bigint) * 1_000n)),
       webUrl: config.env.PUBLIC_WEB_URL.replace(/\/$/, ''),
       simulated: config.mockedSubsystems,
     };
@@ -184,15 +185,14 @@ export function registerExtensionRoutes(app: Express, deps: ExtensionDeps): void
         .json(badRequest('Parrot has not seen that post', 'Scroll back to it and try again.'));
     }
     if (post.durationS === null) {
-      // Without a length the cost cannot be estimated, and the agents would be
-      // pricing a guess.
+      // Without a length the cost of the dub cannot be known.
       return res
         .status(400)
         .json(badRequest('Parrot could not tell how long the video is', 'Play it for a moment and try again.'));
     }
     // Authorship, on the only evidence there is: the page. Unverified, and
     // labelled so - but it still stops the honest mistake of dubbing someone
-    // else's video and routing its earnings to them.
+    // else's video and charging them for it.
     if (requesterHandle !== post.authorHandle) {
       return res.status(403).json({
         ok: false,
@@ -201,8 +201,9 @@ export function registerExtensionRoutes(app: Express, deps: ExtensionDeps): void
         detail: 'Only the person who posted the video can ask for a dub.',
       } satisfies ApiErrorDto);
     }
-    const language = SUPPORTED_LANGUAGES.find((l) => l.code === languageCode && l.code !== 'en');
-    if (!language) {
+    // No language means "you choose".
+    const language = languageCode ? SUPPORTED_LANGUAGES.find((l) => l.code === languageCode && l.code !== 'en') : null;
+    if (languageCode && !language) {
       return res.status(400).json(badRequest('Parrot does not speak that one yet', 'Pick another language.'));
     }
     if (post.pendingSince && Date.now() - post.pendingSince.getTime() < PENDING_WINDOW_MS) {
@@ -213,14 +214,14 @@ export function registerExtensionRoutes(app: Express, deps: ExtensionDeps): void
 
     post.pendingSince = new Date();
     const run = deps.dubObservedPost;
-    void run(post, language.code)
+    void run(post, language?.code ?? null)
       .then((answer) => {
         post.lastAnswer = { text: answer, at: new Date() };
       })
       .catch((error: unknown) => {
         console.error('[extension] x.com request failed', error);
         post.lastAnswer = {
-          text: 'Something went wrong on my side. Nothing was charged to you - try again shortly.',
+          text: 'Something went wrong on my side. Nothing was charged to you. Try again shortly.',
           at: new Date(),
         };
       })
@@ -236,24 +237,23 @@ export function registerExtensionRoutes(app: Express, deps: ExtensionDeps): void
   async function statusFor(postId: string): Promise<ExtensionPostStatusDto> {
     const webUrl = getConfig().env.PUBLIC_WEB_URL.replace(/\/$/, '');
 
-    const dubs: ExtensionDubDto[] = store
-      .allJobs()
-      .filter((job) => job.sourcePostId === postId)
-      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
-      .map((job) => {
-        const watchable = isPublished(job.state);
-        return {
-          jobId: job.id,
-          languageCode: job.targetLang,
-          languageName: languageName(job.targetLang),
-          state: job.state,
-          statusLabel: statusLabel(job.state),
-          watchable,
-          watchUrl: watchable ? `${webUrl}/dub/${job.id}` : null,
-        };
-      });
+    const dubbed = store.findPostBySource(postId);
+    const records = dubbed ? store.dubsForPost(dubbed.id) : [];
+    const working = records.some((d) => d.state === 'QUEUED' || d.state === 'DUBBING' || d.state === 'QC');
+    const dubs: ExtensionDubDto[] = records.map((dub) => {
+      const watchable = isPublished(dub.state);
+      return {
+        jobId: dub.id,
+        languageCode: dub.lang,
+        languageName: languageName(dub.lang),
+        state: dub.state,
+        statusLabel: statusPhrase(dub.state),
+        watchable,
+        watchUrl: watchable ? `${webUrl}/dub/${dub.id}` : null,
+      };
+    });
 
-    // The authoritative read. With no jobs yet this is the only way to know
+    // The authoritative read. With no dubs yet this is the only way to know
     // whether the post exists, has a video, and who wrote it.
     let source = null;
     try {
@@ -274,7 +274,7 @@ export function registerExtensionRoutes(app: Express, deps: ExtensionDeps): void
         hasVideo: true,
         authorHandle: observed.authorHandle,
         dubs,
-        pending: recent,
+        pending: recent || working,
         lastReply: observed.lastAnswer
           ? { text: observed.lastAnswer.text, at: observed.lastAnswer.at.toISOString() }
           : null,
@@ -309,7 +309,7 @@ export function registerExtensionRoutes(app: Express, deps: ExtensionDeps): void
       hasVideo: source?.video != null,
       authorHandle: source?.authorHandle.toLowerCase() ?? null,
       dubs,
-      pending,
+      pending: pending || working,
       lastReply: last ? { text: last.text, at: last.createdAt.toISOString() } : null,
       source: 'server',
     };

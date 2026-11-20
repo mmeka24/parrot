@@ -1,29 +1,19 @@
 /**
- * What the bot says, who it is allowed to say yes to, and how often it speaks.
+ * What Parrot says under a post, who it listens to, and how often it speaks.
  *
- * Three responsibilities, all of them boring on purpose:
- *
- *  1. COMPOSITION. Every user-facing word comes from `copy.bot.*` through
- *     `fill()`. Nothing in this file writes a sentence of its own. That is what
- *     keeps the forbidden-vocabulary guard in packages/shared/test/copy.test.ts
- *     meaningful - if replies were assembled from local string literals, the
- *     word "wallet" could reach a creator without the build noticing.
- *
- *  2. AUTHORISATION (see isAuthorised below).
- *
- *  3. DEDUPE + RATE LIMITING. X redelivers mentions, and a redelivered mention
- *     that re-dubs is money spent twice.
+ * Every reply is composed from the vocabulary map in @parrot/shared, so the
+ * words a creator reads on the timeline are covered by the same forbidden-word
+ * test as the rest of the product.
  */
 
 import {
   copy,
   fill,
-  formatUsd,
+  languageByCode,
   languageName,
   type DeclineReason,
-  type JobState,
+  type DubState,
   type Mention,
-  type Micros,
   type SourcePost,
 } from '@parrot/shared';
 import type { Store } from '../store/store.js';
@@ -33,64 +23,32 @@ import type { PostedReply, XAdapter } from './x-adapter.js';
 // Reply composition
 // ---------------------------------------------------------------------------
 
-export type ReplyKind =
-  | 'accepted'
-  | 'published'
-  | 'duplicate'
-  | 'declined'
-  | 'qcFailed'
-  | 'firstUnlock'
-  | 'dailySummary'
-  | 'status'
-  | 'error'
-  | 'rateLimited';
-
-export interface ReplyParamsByKind {
-  accepted: { language: string };
-  published: { language: string; link: string };
-  duplicate: { language: string; link: string };
-  declined: { reason: DeclineReason };
-  qcFailed: Record<string, never>;
-  firstUnlock: { language: string; amount: Micros | string };
-  dailySummary: { language: string; amount: Micros | string; count: number };
-  status: { state: JobState; detail?: string };
-  error: Record<string, never>;
-  rateLimited: Record<string, never>;
-}
-
 /**
  * One decline reason -> one line of copy. The reasons come from the state
  * machine's DECLINE_REASONS, so a new reason is a compile error here rather
  * than a silently generic reply.
  */
 const DECLINE_COPY: Readonly<Record<DeclineReason, string>> = {
-  LOW_EV: copy.bot.declineReasonLowSignal,
-  BUDGET_FLOOR: copy.bot.declineReasonBudget,
-  DAILY_CAP: copy.bot.declineReasonBudget,
-  MAX_EXPOSURE: copy.bot.declineReasonBudget,
   TOO_LONG: copy.bot.declineReasonTooLong,
+  TOO_SHORT: copy.bot.declineReasonTooShort,
   UNSUPPORTED_LANGUAGE: copy.bot.declineReasonUnsupportedLanguage,
   NO_VIDEO: copy.bot.declineReasonNoVideo,
   NOT_AUTHOR: copy.bot.declineReasonNotAuthor,
+  NO_BALANCE: copy.bot.declineReasonNoBalance,
+  ALREADY_DUBBED: copy.bot.declineReasonAlreadyDubbed,
 };
 
-/** Job state -> the plain-language phrase a creator reads. */
-const STATE_COPY: Readonly<Record<JobState, string>> = {
-  REQUESTED: copy.status.requested,
-  PARSED: copy.status.parsed,
-  EVALUATING: copy.status.evaluating,
-  DECLINED: copy.status.declined,
-  APPROVED: copy.status.approved,
+/** Dub state -> the plain-language phrase a creator reads. */
+const STATE_COPY: Readonly<Record<DubState, string>> = {
+  QUEUED: copy.status.queued,
   DUBBING: copy.status.dubbing,
   QC: copy.status.qc,
-  REJECTED_BY_QC: copy.status.rejectedByQc,
   PUBLISHED: copy.status.published,
-  EARNING: copy.status.earning,
-  SETTLED: copy.status.settled,
+  REJECTED_BY_QC: copy.status.rejectedByQc,
   FAILED: copy.status.failed,
 };
 
-export function statusPhrase(state: JobState): string {
+export function statusPhrase(state: DubState): string {
   return STATE_COPY[state];
 }
 
@@ -98,87 +56,41 @@ export function declineLine(reason: DeclineReason): string {
   return DECLINE_COPY[reason];
 }
 
-function asAmount(value: Micros | string): string {
-  return typeof value === 'string' ? value : formatUsd(value);
+function nameList(codes: readonly string[]): string {
+  const names = codes.map((c) => languageName(c));
+  if (names.length <= 1) return names[0] ?? '';
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
-export function composeReply(kind: 'accepted', params: ReplyParamsByKind['accepted']): string;
-export function composeReply(kind: 'published', params: ReplyParamsByKind['published']): string;
-export function composeReply(kind: 'duplicate', params: ReplyParamsByKind['duplicate']): string;
-export function composeReply(kind: 'declined', params: ReplyParamsByKind['declined']): string;
-export function composeReply(kind: 'qcFailed', params?: ReplyParamsByKind['qcFailed']): string;
-export function composeReply(kind: 'firstUnlock', params: ReplyParamsByKind['firstUnlock']): string;
-export function composeReply(
-  kind: 'dailySummary',
-  params: ReplyParamsByKind['dailySummary'],
-): string;
-export function composeReply(kind: 'status', params: ReplyParamsByKind['status']): string;
-export function composeReply(kind: 'error', params?: ReplyParamsByKind['error']): string;
-export function composeReply(kind: 'rateLimited', params?: ReplyParamsByKind['rateLimited']): string;
-export function composeReply(kind: ReplyKind, params: Record<string, unknown> = {}): string {
-  switch (kind) {
-    case 'accepted': {
-      const p = params as unknown as ReplyParamsByKind['accepted'];
-      return fill(copy.bot.acceptedReply, { language: languageName(p.language) });
-    }
-    case 'published': {
-      const p = params as unknown as ReplyParamsByKind['published'];
-      return fill(copy.bot.publishedReply, {
-        language: languageName(p.language),
-        link: p.link,
-      });
-    }
-    case 'duplicate': {
-      const p = params as unknown as ReplyParamsByKind['duplicate'];
-      return fill(copy.bot.duplicateReply, {
-        language: languageName(p.language),
-        link: p.link,
-      });
-    }
-    case 'declined': {
-      const p = params as unknown as ReplyParamsByKind['declined'];
-      return fill(copy.bot.declinedReply, { reason: declineLine(p.reason) });
-    }
-    case 'qcFailed':
-      return copy.bot.qcFailedReply;
-    case 'firstUnlock': {
-      const p = params as unknown as ReplyParamsByKind['firstUnlock'];
-      return fill(copy.bot.firstUnlockReply, {
-        language: languageName(p.language),
-        amount: asAmount(p.amount),
-      });
-    }
-    case 'dailySummary': {
-      const p = params as unknown as ReplyParamsByKind['dailySummary'];
-      return fill(copy.bot.dailySummaryReply, {
-        language: languageName(p.language),
-        amount: asAmount(p.amount),
-        count: p.count,
-      });
-    }
-    case 'status': {
-      const p = params as unknown as ReplyParamsByKind['status'];
-      // `detail` is optional in the call but not in the template, so an empty
-      // one becomes an empty string rather than making fill() throw.
-      return fill(copy.bot.statusReply, {
-        status: statusPhrase(p.state),
-        detail: p.detail ?? '',
-      }).trim();
-    }
-    case 'error':
-      return copy.bot.errorReply;
-    case 'rateLimited':
-      return copy.bot.rateLimitedReply;
-    default: {
-      const exhaustive: never = kind;
-      throw new Error(`unknown reply kind ${String(exhaustive)}`);
-    }
-  }
-}
+/** The replies Parrot can give. Each returns the finished text. */
+export const replies = {
+  /** "On it" for a post Parrot chose the languages for. */
+  plan: (langs: readonly string[]): string =>
+    langs.length === 1
+      ? fill(copy.bot.singleReply, { language: languageName(langs[0] as string) })
+      : fill(copy.bot.planReply, { languages: nameList(langs) }),
+  /** The text of the post that carries a dub. */
+  dubPost: (lang: string, link: string): string => {
+    const spec = languageByCode(lang);
+    return fill(copy.bot.dubPost, {
+      flag: spec?.flag ?? '',
+      nativeName: spec?.nativeName ?? lang,
+      language: spec?.englishName ?? lang,
+      link,
+    }).trim();
+  },
+  duplicate: (lang: string, link: string): string =>
+    fill(copy.bot.duplicateReply, { language: languageName(lang), link }),
+  declined: (reason: DeclineReason): string => fill(copy.bot.declinedReply, { reason: declineLine(reason) }),
+  qcFailed: (lang: string): string => fill(copy.bot.qcFailedReply, { language: languageName(lang) }),
+  failed: (lang: string): string => fill(copy.bot.failedReply, { language: languageName(lang) }),
+  error: (): string => copy.bot.errorReply,
+  rateLimited: (): string => copy.bot.rateLimitedReply,
+} as const;
 
-/** The watch link that goes in a published/duplicate reply. */
-export function watchLink(jobId: string, webBaseUrl: string): string {
-  return `${webBaseUrl.replace(/\/$/, '')}/w/${jobId}`;
+/** The watch link that goes with a dub. */
+export function watchLink(dubId: string, webBaseUrl: string): string {
+  return `${webBaseUrl.replace(/\/$/, '')}/w/${dubId}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -189,13 +101,11 @@ export function watchLink(jobId: string, webBaseUrl: string): string {
  * AUTHORISATION RULE: by default, only the AUTHOR of the post may ask for it to
  * be dubbed.
  *
- * The reason is money, not politeness. A published dub pays the creator share
- * to whoever Parrot recognises as the creator of the source post. If anyone
- * could reply "@parrot dub this to Spanish" under someone else's video, they
- * would be spending Parrot's budget on content they do not own, and the
- * earnings would attach to a post whose author never opted in. It is also the
- * only consent signal we have: a creator asking under their own video is the
- * creator agreeing to be dubbed.
+ * The reason is money, not politeness. The views a dub gets are charged to the
+ * creator of the source post. If anyone could reply "@parrot dub this" under
+ * someone else's video, they would be running up a bill for a person who never
+ * asked. It is also the only consent signal we have: a creator asking under
+ * their own video is the creator agreeing to be dubbed.
  *
  * `mention.parentAuthorId` MUST come from the expanded referenced-tweet author
  * (see x-adapter.ts) - `in_reply_to_user_id` is a different thing and using it
@@ -291,8 +201,8 @@ export class BotService {
     return this.adapter.isMock;
   }
 
-  link(jobId: string): string {
-    return watchLink(jobId, this.webBaseUrl);
+  link(dubId: string): string {
+    return watchLink(dubId, this.webBaseUrl);
   }
 
   isAuthorised(mention: Mention, sourcePost: SourcePost | null): boolean {
@@ -314,8 +224,8 @@ export class BotService {
   }
 
   /** Record the final outcome of a mention we already claimed. */
-  recordOutcome(mentionId: string, jobId: string | null, outcome: string): void {
-    this.store.markMentionProcessed(mentionId, jobId, outcome);
+  recordOutcome(mentionId: string, postId: string | null, outcome: string): void {
+    this.store.markMentionProcessed(mentionId, postId, outcome);
   }
 
   wasProcessed(mentionId: string): boolean {
@@ -340,7 +250,7 @@ export class BotService {
     if (!this.limiter.tryConsume()) {
       return {
         sent: false,
-        text: composeReply('rateLimited'),
+        text: replies.rateLimited(),
         reply: null,
         suppressedBy: 'rate_limit',
       };

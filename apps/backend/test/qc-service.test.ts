@@ -1,12 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  qcReportSchema,
-  QC_DURATION_TOLERANCE,
-  QC_MIN_LANGUAGE_CONFIDENCE,
-  FORBIDDEN_WORDS,
-} from '@parrot/shared';
+import { qcReportSchema, QC_DURATION_TOLERANCE, FORBIDDEN_WORDS } from '@parrot/shared';
 import {
   QcService,
   parseSilences,
@@ -14,61 +9,100 @@ import {
   isSkipped,
   type QcCheckResult,
   type QcServiceReport,
+  type QcInput,
 } from '../src/services/qc-service.js';
 import { resetConfig } from '../src/config.js';
 
-const API_KEY = 'xi-secret-key-that-must-never-be-logged';
+const XAI_KEY = 'xai-secret-key-that-must-never-be-logged';
 const FIXTURES = resolve(fileURLToPath(new URL('.', import.meta.url)), '../fixtures');
+const DUB = resolve(FIXTURES, 'good-dub.wav');
+const ORIGINAL = resolve(FIXTURES, 'mock-dub.wav');
 
-const GOOD_DUB = resolve(FIXTURES, 'good-dub.wav');
-const SILENT_DUB = resolve(FIXTURES, 'silent-dub.wav');
-const TRUNCATED_DUB = resolve(FIXTURES, 'truncated-dub.wav');
-const WRONG_LANGUAGE_DUB = resolve(FIXTURES, 'wrong-language-dub.wav');
-
-function sttEnv(enabled: boolean): void {
+function env(withChecker: boolean): void {
   process.env.DATABASE_URL = 'postgres://localhost/parrot_test';
-  if (enabled) {
-    process.env.ELEVENLABS_API_KEY = API_KEY;
-  } else {
-    delete process.env.ELEVENLABS_API_KEY;
-  }
+  if (withChecker) process.env.XAI_API_KEY = XAI_KEY;
+  else delete process.env.XAI_API_KEY;
   resetConfig();
 }
 
-/** An STT stand-in. Never a real request. */
-function sttFetch(body: unknown, status = 200) {
-  const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
-  const impl = async (url: string, init?: RequestInit): Promise<Response> => {
-    calls.push({ url, init });
-    return new Response(JSON.stringify(body), {
-      status,
-      headers: { 'content-type': 'application/json' },
-    });
+beforeEach(() => env(true));
+afterEach(() => {
+  delete process.env.XAI_API_KEY;
+  resetConfig();
+});
+
+/**
+ * A stand-in for the INDEPENDENT checker (xAI): speech-to-text answers, then
+ * the meaning judge. Records every URL so tests can prove which companies
+ * were asked. Never a real request.
+ */
+function checker(opts: {
+  dub?: { text: string; language: string };
+  original?: { text: string; language: string };
+  meaningScore?: number;
+  sttStatus?: number;
+}) {
+  const urls: string[] = [];
+  let stt = 0;
+  const impl = async (url: string): Promise<Response> => {
+    urls.push(url);
+    if (url.endsWith('/stt')) {
+      stt++;
+      if (opts.sttStatus && opts.sttStatus !== 200) return new Response('{}', { status: opts.sttStatus });
+      const body = stt === 1 ? (opts.dub ?? { text: 'Hola a todos', language: 'es-mx' }) : (opts.original ?? { text: 'Hi everyone', language: 'en' });
+      return new Response(JSON.stringify({ ...body, duration: 7 }), { status: 200 });
+    }
+    const verdict = {
+      language: 'es',
+      backTranslation: 'Hello everyone, today we cook pasta.',
+      meaningScore: opts.meaningScore ?? 94,
+      reason: 'Same message.',
+    };
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(verdict) } }] }), { status: 200 });
   };
-  return { impl, calls };
+  return { impl, urls };
 }
 
-/** ffmpeg stand-in: hands back canned stderr. */
-function ffmpegStderr(stderr: string) {
-  return async () => ({ code: 0, stderr });
-}
-
-/** ffmpeg stand-in for a machine with no ffmpeg installed. */
+/** Healthy ffmpeg analysis output. */
+const HEALTHY_AUDIO = [
+  '[silencedetect @ 0x1] silence_start: 2.0',
+  '[silencedetect @ 0x1] silence_end: 3.2 | silence_duration: 1.2',
+  '[Parsed_ebur128_1 @ 0x2] Summary:',
+  '    I:         -18.4 LUFS',
+].join('\n');
+const ffmpegOk = (stderr = HEALTHY_AUDIO) => async () => ({ code: 0, stderr });
 const ffmpegMissing = async (): Promise<never> => {
   const err = new Error('spawn ffmpeg ENOENT') as Error & { code: string };
   err.code = 'ENOENT';
   throw err;
 };
 
-const GOOD_FFMPEG_STDERR = [
-  '[silencedetect @ 0x1] silence_start: 2.0',
-  '[silencedetect @ 0x1] silence_end: 3.2 | silence_duration: 1.2',
-  '[Parsed_ebur128_1 @ 0x2] Summary:',
-  '',
-  '  Integrated loudness:',
-  '    I:         -18.4 LUFS',
-  '    Threshold: -28.6 LUFS',
-].join('\n');
+/** ffprobe stand-in: real lengths per file. */
+const lengths = (dub: number, original?: number) => async (target: string) => {
+  if (target === DUB) return dub;
+  if (original !== undefined && target === ORIGINAL) return original;
+  throw new Error('cannot measure');
+};
+
+function svc(over: {
+  fetchImpl?: ReturnType<typeof checker>['impl'];
+  probe?: (t: string) => Promise<number>;
+  ffmpeg?: () => Promise<{ code: number; stderr: string }>;
+} = {}) {
+  return new QcService({
+    fetchImpl: over.fetchImpl ?? checker({}).impl,
+    probeDuration: over.probe ?? lengths(30, 30),
+    runFfmpeg: over.ffmpeg ?? ffmpegOk(),
+  });
+}
+
+const REAL: QcInput = {
+  dubPath: DUB,
+  sourceDurationS: 30,
+  targetLang: 'es',
+  sourcePath: ORIGINAL,
+  dubProvider: 'ElevenLabs',
+};
 
 function find(report: QcServiceReport, name: QcCheckResult['name']): QcCheckResult {
   const check = report.checks.find((c) => c.name === name);
@@ -76,513 +110,159 @@ function find(report: QcServiceReport, name: QcCheckResult['name']): QcCheckResu
   return check;
 }
 
-afterEach(() => {
-  delete process.env.ELEVENLABS_API_KEY;
-  resetConfig();
-});
-
 // ---------------------------------------------------------------------------
 
-describe('QcService - duration_match', () => {
-  beforeEach(() => sttEnv(false));
-
-  const svc = () => new QcService({ runFfmpeg: ffmpegMissing });
-
-  it('passes a dub at exactly the tolerance boundary', () => {
-    expect(QC_DURATION_TOLERANCE).toBe(0.1);
-    const check = svc().checkDuration({
-      dubPath: GOOD_DUB,
-      sourceDurationS: 100,
-      dubDurationS: 110, // exactly +10%
-      targetLang: 'es',
-    });
-    expect(check.status).toBe('passed');
-    expect(check.measured?.driftRatio).toBe(0.1);
-  });
-
-  it('passes at exactly the tolerance boundary on the short side', () => {
-    const check = svc().checkDuration({
-      dubPath: TRUNCATED_DUB,
-      sourceDurationS: 100,
-      dubDurationS: 90,
-      targetLang: 'es',
-    });
-    expect(check.status).toBe('passed');
-  });
-
-  it('fails just past the boundary', () => {
-    const check = svc().checkDuration({
-      dubPath: GOOD_DUB,
-      sourceDurationS: 100,
-      dubDurationS: 110.1,
-      targetLang: 'es',
-    });
-    expect(check.status).toBe('failed');
-    expect(check.passed).toBe(false);
-  });
-
-  it('fails a truncated dub', () => {
-    const check = svc().checkDuration({
-      dubPath: TRUNCATED_DUB,
-      sourceDurationS: 100,
-      dubDurationS: 40,
-      targetLang: 'es',
-    });
-    expect(check.status).toBe('failed');
-    expect(check.detail).toContain('40.0s');
-  });
-});
-
-// ---------------------------------------------------------------------------
-
-describe('QcService - language_detect', () => {
-  const input = {
-    dubPath: GOOD_DUB,
-    sourceDurationS: 1,
-    dubDurationS: 1,
-    targetLang: 'es',
-  };
-
-  it('passes when the right language is heard confidently', async () => {
-    sttEnv(true);
-    const fetchImpl = sttFetch({
-      language_code: 'es',
-      language_probability: 0.97,
-      text: 'hola, buenos dias',
-    });
-    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing });
-    const check = await svc.checkLanguage(input);
-
-    expect(check.status).toBe('passed');
-    expect(check.measured?.confidence).toBe(0.97);
-    expect(fetchImpl.calls[0]?.url).toBe('https://api.elevenlabs.io/v1/speech-to-text');
-    const body = fetchImpl.calls[0]?.init?.body as FormData;
-    expect(body.get('model_id')).toBe('scribe_v3');
-    // language_code must NOT be sent - auto-detect is the entire point.
-    expect(body.get('language_code')).toBeNull();
-    expect((fetchImpl.calls[0]?.init?.headers as Record<string, string>)['xi-api-key']).toBe(
-      API_KEY,
-    );
-  });
-
-  it('passes on the three-letter code the real service sends ("spa", not "es")', async () => {
-    // Exactly what ElevenLabs returned for a real Spanish dub on 2026-11-19.
-    // The earlier tests faked "es", which is why a correct dub once failed QC.
-    sttEnv(true);
-    const fetchImpl = sttFetch({
-      language_code: 'spa',
-      language_probability: 0.9858934879302979,
-      text: 'esto es lo que nadie te dice sobre cocinar con poco dinero',
-    });
-    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing });
-    const check = await svc.checkLanguage(input);
-
-    expect(check.status).toBe('passed');
-    expect(check.measured).toMatchObject({ detected: 'es', expected: 'es' });
-  });
-
-  it('still fails a wrong language reported as a three-letter code', async () => {
-    sttEnv(true);
-    const fetchImpl = sttFetch({ language_code: 'fra', language_probability: 0.99, text: 'bonjour' });
-    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing });
-    const check = await svc.checkLanguage(input);
-
-    expect(check.status).toBe('failed');
-    expect(check.detail).toContain('French');
-  });
-
-  it('fails when the dub is in the wrong language', async () => {
-    sttEnv(true);
-    const fetchImpl = sttFetch({
-      language_code: 'fr',
-      language_probability: 0.99,
-      text: 'bonjour tout le monde',
-    });
-    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing });
-    const check = await svc.checkLanguage({ ...input, dubPath: WRONG_LANGUAGE_DUB });
-
-    expect(check.status).toBe('failed');
-    expect(check.passed).toBe(false);
-    expect(check.detail).toContain('French');
-    expect(check.detail).toContain('Spanish');
-  });
-
-  it('fails when confidence is below the floor', async () => {
-    sttEnv(true);
-    expect(QC_MIN_LANGUAGE_CONFIDENCE).toBe(0.6);
-    const fetchImpl = sttFetch({
-      language_code: 'es',
-      language_probability: 0.42,
-      text: '...',
-    });
-    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing });
-    const check = await svc.checkLanguage(input);
-
-    expect(check.status).toBe('failed');
-    expect(check.detail).toContain('42%');
-  });
-
-  it('passes at exactly the confidence floor', async () => {
-    sttEnv(true);
-    const fetchImpl = sttFetch({ language_code: 'es', language_probability: 0.6, text: 'hola' });
-    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing });
-    expect((await svc.checkLanguage(input)).status).toBe('passed');
-  });
-
-  it('accepts the ISO 639-3 code Scribe actually returns ("spa" for "es")', async () => {
-    sttEnv(true);
-    const fetchImpl = sttFetch({ language_code: 'spa', language_probability: 0.93, text: 'hola' });
-    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing });
-    const check = await svc.checkLanguage(input);
-    expect(check.status).toBe('passed');
-    expect(check.measured?.detected).toBe('es');
-  });
-
-  it('reads the multi-channel transcripts shape', async () => {
-    sttEnv(true);
-    const fetchImpl = sttFetch({
-      transcripts: [{ language_code: 'es', language_probability: 0.91, text: 'hola' }],
-    });
-    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing });
-    const check = await svc.checkLanguage(input);
-    expect(check.status).toBe('passed');
-    expect(check.measured?.confidence).toBe(0.91);
-  });
-
-  it('is SKIPPED, not passed, when no credentials are configured', async () => {
-    sttEnv(false);
-    const svc = new QcService({ runFfmpeg: ffmpegMissing });
-    const check = await svc.checkLanguage(input);
-    expect(check.status).toBe('skipped');
-    expect(isSkipped(check)).toBe(true);
-    expect(check.measured?.skipped).toBe(true);
-    expect(check.detail).toMatch(/^Skipped:/);
-  });
-
-  it('is SKIPPED when the provider errors, and never leaks the key', async () => {
-    sttEnv(true);
-    const fetchImpl = sttFetch({ detail: 'nope' }, 503);
-    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing });
-    const check = await svc.checkLanguage(input);
-    expect(check.status).toBe('skipped');
-    expect(check.detail).toContain('503');
-    expect(check.detail).not.toContain(API_KEY);
-  });
-});
-
-// ---------------------------------------------------------------------------
-
-describe('QcService - audio_sanity', () => {
-  beforeEach(() => sttEnv(false));
-
-  it('is SKIPPED with a reason when ffmpeg is not installed', async () => {
-    const svc = new QcService({ runFfmpeg: ffmpegMissing });
-    const check = await svc.checkAudioSanity({
-      dubPath: GOOD_DUB,
-      sourceDurationS: 10,
-      dubDurationS: 10,
-      targetLang: 'es',
-    });
-
-    expect(check.status).toBe('skipped');
-    expect(check.status).not.toBe('passed');
-    expect(check.measured?.reason).toBe('ffmpeg_not_installed');
-    expect(check.detail).toContain('ffmpeg');
-    expect(check.detail).toMatch(/^Skipped:/);
-  });
-
-  it('passes healthy audio', async () => {
-    const svc = new QcService({ runFfmpeg: ffmpegStderr(GOOD_FFMPEG_STDERR) });
-    const check = await svc.checkAudioSanity({
-      dubPath: GOOD_DUB,
-      sourceDurationS: 30,
-      dubDurationS: 30,
-      targetLang: 'es',
-    });
-    expect(check.status).toBe('passed');
-    expect(check.measured?.loudnessLufs).toBe(-18.4);
-    expect(check.measured?.nonSilenceRatio).toBeCloseTo(0.96, 2);
-  });
-
-  it('fails a silent dub', async () => {
-    const stderr = [
-      '[silencedetect @ 0x1] silence_start: 0',
-      '[silencedetect @ 0x1] silence_end: 9.5 | silence_duration: 9.5',
-      '    I:         -70.0 LUFS',
-    ].join('\n');
-    const svc = new QcService({ runFfmpeg: ffmpegStderr(stderr) });
-    const check = await svc.checkAudioSanity({
-      dubPath: SILENT_DUB,
-      sourceDurationS: 10,
-      dubDurationS: 10,
-      targetLang: 'es',
-    });
-    expect(check.status).toBe('failed');
-    expect(check.detail).toContain('5%');
-    expect(check.measured?.nonSilenceRatio).toBeCloseTo(0.05, 3);
-  });
-
-  it('fails on a dead gap longer than the limit', async () => {
-    const stderr = [
-      '[silencedetect @ 0x1] silence_start: 5.0',
-      '[silencedetect @ 0x1] silence_end: 12.0 | silence_duration: 7.0',
-      '    I:         -16.0 LUFS',
-    ].join('\n');
-    const svc = new QcService({ runFfmpeg: ffmpegStderr(stderr) });
-    const check = await svc.checkAudioSanity({
-      dubPath: GOOD_DUB,
-      sourceDurationS: 60,
-      dubDurationS: 60,
-      targetLang: 'es',
-    });
-    expect(check.status).toBe('failed');
-    expect(check.detail).toContain('7.0s silent stretch');
-  });
-
-  it('fails when loudness falls outside the window', async () => {
-    const stderr = '    I:         -3.2 LUFS';
-    const svc = new QcService({ runFfmpeg: ffmpegStderr(stderr) });
-    const check = await svc.checkAudioSanity({
-      dubPath: GOOD_DUB,
-      sourceDurationS: 20,
-      dubDurationS: 20,
-      targetLang: 'es',
-    });
-    expect(check.status).toBe('failed');
-    expect(check.detail).toContain('-3.2 LUFS');
-  });
-
-  it('reads loudnorm JSON output too', () => {
-    expect(parseLoudness('  "input_i" : "-23.7",\n  "input_tp" : "-2.0"')).toBe(-23.7);
-    expect(parseLoudness('nothing useful here')).toBeNull();
-  });
-
-  it('counts a silence that runs to the end of the file', () => {
-    expect(parseSilences('[silencedetect] silence_start: 4.0', 10)).toEqual([6]);
-    expect(parseSilences('no silence here', 10)).toEqual([]);
-  });
-
-  it('is SKIPPED when ffmpeg runs but fails for another reason', async () => {
-    const svc = new QcService({
-      runFfmpeg: async () => {
-        throw new Error('ffmpeg exited with 1');
-      },
-    });
-    const check = await svc.checkAudioSanity({
-      dubPath: GOOD_DUB,
-      sourceDurationS: 10,
-      dubDurationS: 10,
-      targetLang: 'es',
-    });
-    expect(check.status).toBe('skipped');
-    expect(check.measured?.reason).toBe('ffmpeg_failed');
-  });
-});
-
-// ---------------------------------------------------------------------------
-
-describe('QcService - back_translation (the independent judge)', () => {
-  /**
-   * Routes by URL: speech-to-text answers for the transcriber, chat
-   * completions for the judge. The judge never sees an ElevenLabs URL.
-   */
-  function routedFetch(opts: { dubText: string; sourceText: string; verdict: unknown }) {
-    const calls: string[] = [];
-    let stt = 0;
-    const impl = async (url: string): Promise<Response> => {
-      calls.push(url);
-      if (url.includes('speech-to-text')) {
-        stt++;
-        // First transcription is the dub, second the original.
-        const text = stt === 1 ? opts.dubText : opts.sourceText;
-        const lang = stt === 1 ? 'es' : 'en';
-        return new Response(JSON.stringify({ language_code: lang, language_probability: 0.97, text }), { status: 200 });
-      }
-      return new Response(
-        JSON.stringify({ choices: [{ message: { content: JSON.stringify(opts.verdict) } }] }),
-        { status: 200 },
-      );
-    };
-    return { impl, calls };
-  }
-
-  function judgeEnv(): void {
-    sttEnv(true);
-    process.env.XAI_API_KEY = 'xai-test';
-    resetConfig();
-  }
-
-  afterEach(() => {
-    delete process.env.XAI_API_KEY;
-    resetConfig();
-  });
-
-  it('is SKIPPED, never passed, when no judge is configured', async () => {
-    sttEnv(true);
-    const fetchImpl = sttFetch({ language_code: 'es', language_probability: 0.95, text: 'hola' });
-    const report = await new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing }).run({
-      dubPath: GOOD_DUB, sourceDurationS: 60, dubDurationS: 60, targetLang: 'es', sourcePath: GOOD_DUB,
-    });
-    expect(find(report, 'back_translation').status).toBe('skipped');
-    expect(find(report, 'back_translation').measured?.reason).toBe('no_judge');
-  });
-
-  it('passes a faithful dub, and the judge - not the dubber - decides the language', async () => {
-    judgeEnv();
-    const f = routedFetch({
-      dubText: 'Hola a todos, hoy cocinamos pasta.',
-      sourceText: 'Hi everyone, today we are cooking pasta.',
-      verdict: { language: 'es', backTranslation: 'Hello everyone, today we cook pasta.', meaningScore: 94, reason: 'Same message.' },
-    });
-    const report = await new QcService({ fetchImpl: f.impl, runFfmpeg: ffmpegMissing }).run({
-      dubPath: GOOD_DUB, sourceDurationS: 60, dubDurationS: 60, targetLang: 'es',
-      sourcePath: GOOD_DUB, dubProvider: 'ElevenLabs',
-    });
+describe('QC - a good real dub', () => {
+  it('passes only when all four checks actually ran and passed', async () => {
+    const report = await svc().run(REAL);
     expect(report.passed).toBe(true);
-    expect(find(report, 'back_translation').measured?.meaningScore).toBe(94);
-    expect(find(report, 'language_detect').detail).toMatch(/judged by Grok \(xAI\), independent of ElevenLabs/);
-    expect(f.calls.some((u) => u.includes('chat/completions'))).toBe(true);
+    expect(report.checks.map((c) => c.status)).toEqual(['passed', 'passed', 'passed', 'passed']);
     expect(qcReportSchema.safeParse(report).success).toBe(true);
   });
 
-  it('fails a dub in the right language that says something else', async () => {
-    judgeEnv();
-    const f = routedFetch({
-      dubText: 'Compra mi curso ahora.',
-      sourceText: 'Hi everyone, today we are cooking pasta.',
-      verdict: { language: 'es', backTranslation: 'Buy my course now.', meaningScore: 12, reason: 'A different message.' },
-    });
-    const report = await new QcService({ fetchImpl: f.impl, runFfmpeg: ffmpegMissing }).run({
-      dubPath: GOOD_DUB, sourceDurationS: 60, dubDurationS: 60, targetLang: 'es', sourcePath: GOOD_DUB,
-    });
-    expect(report.passed).toBe(false);
-    expect(find(report, 'back_translation').status).toBe('failed');
-    expect(find(report, 'language_detect').status).toBe('passed');
-  });
-
-  it('fails when the judge hears a different language than the transcriber claimed', async () => {
-    judgeEnv();
-    const f = routedFetch({
-      dubText: 'Ola a todos, hoje cozinhamos massa.',
-      sourceText: 'Hi everyone, today we are cooking pasta.',
-      verdict: { language: 'pt', backTranslation: 'Hello everyone, today we cook pasta.', meaningScore: 93, reason: 'Same message, in Portuguese.' },
-    });
-    const report = await new QcService({ fetchImpl: f.impl, runFfmpeg: ffmpegMissing }).run({
-      dubPath: GOOD_DUB, sourceDurationS: 60, dubDurationS: 60, targetLang: 'es', sourcePath: GOOD_DUB,
-    });
-    expect(report.passed).toBe(false);
-    expect(find(report, 'language_detect').status).toBe('failed');
-    expect(find(report, 'language_detect').measured?.transcriberHeard).toBe('es');
+  it('never asks ElevenLabs (the dubber) to check its own dub', async () => {
+    const c = checker({});
+    await svc({ fetchImpl: c.impl }).run(REAL);
+    expect(c.urls.length).toBeGreaterThan(0);
+    expect(c.urls.every((u) => u.startsWith('https://api.x.ai/'))).toBe(true);
+    expect(c.urls.some((u) => u.includes('elevenlabs'))).toBe(false);
   });
 });
 
-// ---------------------------------------------------------------------------
+describe('QC - length is measured, not assumed', () => {
+  it('measures both files and fails a dub that is too short', async () => {
+    const report = await svc({ probe: lengths(20, 30) }).run(REAL);
+    const check = find(report, 'duration_match');
+    expect(check.status).toBe('failed');
+    expect(check.measured?.dubDurationS).toBe(20);
+    expect(check.measured?.sourceFrom).toBe('file');
+    expect(report.passed).toBe(false);
+  });
 
-describe('QcService - the whole gate', () => {
-  it('passes a good dub, with the unrunnable checks marked skipped', async () => {
-    sttEnv(true);
-    const fetchImpl = sttFetch({ language_code: 'es', language_probability: 0.95, text: 'hola' });
-    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing });
-
-    const report = await svc.run({
-      dubPath: GOOD_DUB,
-      sourceDurationS: 60,
-      dubDurationS: 62,
-      targetLang: 'es',
-    });
-
-    expect(report.passed).toBe(true);
-    expect(report.checks).toHaveLength(4);
+  it('passes at exactly the tolerance boundary', async () => {
+    const report = await svc({ probe: lengths(30 * (1 + QC_DURATION_TOLERANCE), 30) }).run(REAL);
     expect(find(report, 'duration_match').status).toBe('passed');
+  });
+
+  it('uses the post metadata only when the original file cannot be measured', async () => {
+    const report = await svc({ probe: lengths(30) }).run(REAL);
+    expect(find(report, 'duration_match').measured?.sourceFrom).toBe('post metadata');
+  });
+
+  it('a dub that cannot be measured is NOT published', async () => {
+    const report = await svc({ probe: async () => { throw new Error('no ffprobe'); } }).run(REAL);
+    const check = find(report, 'duration_match');
+    expect(check.status).toBe('skipped');
+    expect(check.passed).toBe(false);
+    expect(check.detail).toMatch(/^Not verified, so not published/);
+    expect(report.passed).toBe(false);
+  });
+});
+
+describe('QC - language, heard by an independent checker', () => {
+  it('fails a dub in the wrong language', async () => {
+    const c = checker({ dub: { text: 'Bonjour tout le monde', language: 'fr' } });
+    const report = await svc({ fetchImpl: c.impl }).run(REAL);
+    expect(find(report, 'language_detect').status).toBe('failed');
+    expect(find(report, 'language_detect').detail).toContain('French');
+    expect(report.passed).toBe(false);
+  });
+
+  it('fails a dub with no speech in it', async () => {
+    const c = checker({ dub: { text: '  ', language: 'es' } });
+    const report = await svc({ fetchImpl: c.impl }).run(REAL);
+    expect(find(report, 'language_detect').status).toBe('failed');
+  });
+
+  it('a dub made with xAI is refused: the checker would be grading itself', async () => {
+    const c = checker({});
+    const report = await svc({ fetchImpl: c.impl }).run({ ...REAL, dubProvider: 'Grok TTS' });
+    expect(find(report, 'language_detect').status).toBe('failed');
+    expect(find(report, 'back_translation').status).toBe('failed');
+    expect(find(report, 'back_translation').detail).toMatch(/grading its own work/);
+    expect(report.passed).toBe(false);
+    expect(c.urls.some((u) => u.endsWith('/stt'))).toBe(false); // not even asked
+  });
+
+  it('with no checker configured, a real dub is not published', async () => {
+    env(false);
+    const report = await svc().run(REAL);
+    expect(find(report, 'language_detect').status).toBe('skipped');
+    expect(report.passed).toBe(false);
+  });
+
+  it('an unreachable checker blocks publishing, and never leaks the key', async () => {
+    const c = checker({ sttStatus: 503 });
+    const report = await svc({ fetchImpl: c.impl }).run(REAL);
+    expect(report.passed).toBe(false);
+    expect(JSON.stringify(report)).not.toContain(XAI_KEY);
+  });
+});
+
+describe('QC - meaning (back-translation)', () => {
+  it('fails a dub in the right language that says something else', async () => {
+    const report = await svc({ fetchImpl: checker({ meaningScore: 12 }).impl }).run(REAL);
     expect(find(report, 'language_detect').status).toBe('passed');
-    // ffmpeg is not installed on this machine: skipped, and we say so.
-    expect(find(report, 'audio_sanity').status).toBe('skipped');
+    expect(find(report, 'back_translation').status).toBe('failed');
+    expect(find(report, 'back_translation').measured?.meaningScore).toBe(12);
+    expect(report.passed).toBe(false);
+  });
+
+  it('without the original clip the meaning is unverified, so not published', async () => {
+    const report = await svc().run({ ...REAL, sourcePath: undefined });
     expect(find(report, 'back_translation').status).toBe('skipped');
-    expect(qcReportSchema.safeParse(report).success).toBe(true);
-  });
-
-  it('fails the whole gate when the language is wrong', async () => {
-    sttEnv(true);
-    const fetchImpl = sttFetch({ language_code: 'fr', language_probability: 0.98, text: 'bonjour' });
-    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing });
-
-    const report = await svc.run({
-      dubPath: WRONG_LANGUAGE_DUB,
-      sourceDurationS: 60,
-      dubDurationS: 60,
-      targetLang: 'es',
-    });
-
     expect(report.passed).toBe(false);
-    expect(find(report, 'language_detect').passed).toBe(false);
-    expect(qcReportSchema.safeParse(report).success).toBe(true);
   });
+});
 
-  it('fails the whole gate on a truncated dub', async () => {
-    sttEnv(true);
-    const fetchImpl = sttFetch({ language_code: 'es', language_probability: 0.95, text: 'hola' });
-    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegMissing });
-
-    const report = await svc.run({
-      dubPath: TRUNCATED_DUB,
-      sourceDurationS: 60,
-      dubDurationS: 24,
-      targetLang: 'es',
-    });
-
-    expect(report.passed).toBe(false);
-    expect(find(report, 'duration_match').passed).toBe(false);
-  });
-
-  it('fails the whole gate on silent audio when ffmpeg IS available', async () => {
-    sttEnv(true);
-    const fetchImpl = sttFetch({ language_code: 'es', language_probability: 0.9, text: '' });
-    const stderr = [
-      '[silencedetect @ 0x1] silence_start: 0',
-      '[silencedetect @ 0x1] silence_end: 29.0 | silence_duration: 29.0',
-      '    I:         -70.0 LUFS',
-    ].join('\n');
-    const svc = new QcService({ fetchImpl: fetchImpl.impl, runFfmpeg: ffmpegStderr(stderr) });
-
-    const report = await svc.run({
-      dubPath: SILENT_DUB,
-      sourceDurationS: 30,
-      dubDurationS: 30,
-      targetLang: 'es',
-    });
-
-    expect(report.passed).toBe(false);
+describe('QC - audio sanity (ffmpeg)', () => {
+  it('fails a mostly silent dub', async () => {
+    const stderr = '[silencedetect] silence_start: 0\n[silencedetect] silence_end: 28.5 | silence_duration: 28.5\n    I: -70.0 LUFS';
+    const report = await svc({ ffmpeg: ffmpegOk(stderr) }).run(REAL);
     expect(find(report, 'audio_sanity').status).toBe('failed');
   });
 
-  it('a skipped check alone never fails the gate', async () => {
-    sttEnv(false); // no STT credentials either
-    const svc = new QcService({ runFfmpeg: ffmpegMissing });
-    const report = await svc.run({
-      dubPath: GOOD_DUB,
-      sourceDurationS: 10,
-      dubDurationS: 10,
-      targetLang: 'es',
-    });
-    expect(report.passed).toBe(true);
-    expect(report.checks.filter(isSkipped)).toHaveLength(3);
+  it('fails on a dead gap longer than the limit', async () => {
+    const stderr = '[silencedetect] silence_start: 5.0\n[silencedetect] silence_end: 12.0 | silence_duration: 7.0\n    I: -16.0 LUFS';
+    const report = await svc({ ffmpeg: ffmpegOk(stderr) }).run(REAL);
+    expect(find(report, 'audio_sanity').detail).toContain('7.0s silent stretch');
   });
 
-  it('produces plain detail lines a dashboard can print', async () => {
-    sttEnv(false);
-    const svc = new QcService({ runFfmpeg: ffmpegMissing });
-    const report = await svc.run({
-      dubPath: GOOD_DUB,
-      sourceDurationS: 10,
-      dubDurationS: 10,
-      targetLang: 'es',
-    });
+  it('fails when loudness is outside the window', async () => {
+    const report = await svc({ ffmpeg: ffmpegOk('    I:         -3.2 LUFS') }).run(REAL);
+    expect(find(report, 'audio_sanity').status).toBe('failed');
+  });
+
+  it('without ffmpeg a real dub is not published', async () => {
+    const report = await svc({ ffmpeg: ffmpegMissing }).run(REAL);
+    expect(find(report, 'audio_sanity').measured?.reason).toBe('ffmpeg_not_installed');
+    expect(report.passed).toBe(false);
+  });
+
+  it('parses ffmpeg output', () => {
+    expect(parseLoudness('  "input_i" : "-23.7",')).toBe(-23.7);
+    expect(parseLoudness('nothing useful here')).toBeNull();
+    expect(parseSilences('[silencedetect] silence_start: 4.0', 10)).toEqual([6]);
+    expect(parseSilences('no silence here', 10)).toEqual([]);
+  });
+});
+
+describe('QC - the simulated stand-in', () => {
+  it('passes with every check honestly skipped, and asks nobody', async () => {
+    const c = checker({});
+    const report = await svc({ fetchImpl: c.impl }).run({ ...REAL, simulated: true, dubDurationS: 30 });
+    expect(report.passed).toBe(true);
+    expect(report.checks.every(isSkipped)).toBe(true);
+    expect(c.urls).toHaveLength(0);
+  });
+});
+
+describe('QC - dashboard text', () => {
+  it('uses plain words a viewer can read', async () => {
+    const report = await svc().run(REAL);
     for (const check of report.checks) {
-      expect(check.detail.length).toBeGreaterThan(10);
       for (const word of FORBIDDEN_WORDS) {
-        expect(check.detail.toLowerCase()).not.toMatch(
-          new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`),
-        );
+        expect(check.detail.toLowerCase()).not.toContain(word);
       }
     }
   });

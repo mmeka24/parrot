@@ -11,14 +11,11 @@ import { ParrotMark } from './ParrotMark';
 
 const NAV = [
   { href: '/', label: localCopy.nav.home },
-  { href: '/agents', label: localCopy.nav.agents },
-  { href: '/leaderboard', label: localCopy.nav.leaderboard },
-  { href: '/console', label: localCopy.nav.console },
   { href: '/under-the-hood', label: localCopy.nav.underTheHood },
   { href: '/extension', label: localCopy.nav.extension },
 ];
 
-export function SiteHeader({ status }: { status: SystemStatusDto }) {
+export function SiteHeader({ status }: { status: SystemStatusDto | null }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
 
@@ -58,7 +55,7 @@ export function SiteHeader({ status }: { status: SystemStatusDto }) {
           {copy.brand.name}
         </Link>
 
-        {status.demoMode ? (
+        {status?.demoMode ? (
           <span className="chip chip-accent" style={{ marginLeft: '0.1rem' }}>
             {copy.demo.badge}
           </span>
@@ -207,7 +204,7 @@ export function SiteFooter() {
           <ParrotMark size={22} />
           {copy.brand.name} — {localCopy.shell.footerTagline}
         </span>
-        <span>{localCopy.home.footerNote}</span>
+        <span>{localCopy.shell.footerNote}</span>
       </div>
     </footer>
   );

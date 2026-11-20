@@ -14,7 +14,7 @@
  *     (`grok-4-fast` and `grok-3-mini` were RETIRED 2026-05-15. Do not use them.)
  *
  *  2. A regex fallback otherwise. It is not a toy: the demo runs on it, since
- *     config.capabilities.grokParsing is false without a key.
+ *     config.capabilities.grok is false without a key.
  *
  * THE SAFETY RULE: whatever Grok returns is re-validated with zod before it can
  * do anything. An LLM that hallucinates a language code must not be able to
@@ -336,6 +336,7 @@ const SYSTEM_PROMPT = [
   'Reply with JSON only, matching the provided schema.',
   `targetLang must be one of: ${SUPPORTED_LANGUAGES.map((l) => `${l.code} (${l.englishName})`).join(', ')}.`,
   'If the requested language is not on that list, set targetLang to null.',
+  'If no language is named at all ("dub this", "dub it for me"), the action is still "dub" with targetLang null: the bot then chooses the languages itself.',
   'If you are not sure what is being asked, use action "unknown" and a low confidence.',
   'Never invent a language code.',
 ].join(' ');

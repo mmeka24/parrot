@@ -81,14 +81,30 @@ export function PostCard({
 
           <div
             data-testid={X_TESTID.tweetText}
-            lang="en"
+            lang={post.dub?.languageCode ?? 'en'}
             className={`whitespace-pre-wrap break-words ${focus ? 'text-[17px] leading-6' : ''}`}
           >
             <RichText text={post.text} />
           </div>
 
+          {post.dub ? (
+            <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-rule-strong px-2.5 py-0.5 text-[13px] font-medium text-dim">
+              <span aria-hidden="true">{post.dub.flag}</span>
+              Dubbed into {post.dub.languageName}
+              {post.dub.simulated ? ' · stand-in audio' : ''}
+            </div>
+          ) : null}
+
           {post.video ? (
-            <VideoPlayer postId={post.id} durationS={post.video.durationS} url={post.video.url} />
+            <VideoPlayer
+              postId={post.id}
+              durationS={post.video.durationS}
+              url={post.video.url}
+              placeholderLabel={
+                post.dub ? `${post.dub.nativeName} dub · stand-in, nothing to play` : 'Sample clip · no footage'
+              }
+              onViewed={(views) => setLocal({ ...shown, metrics: { ...shown.metrics, views } })}
+            />
           ) : null}
 
           {focus ? (

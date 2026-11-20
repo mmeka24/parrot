@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { X_TESTID } from '@parrot/shared';
+import { recordView } from '@/lib/api';
 import { formatClock, hueFor } from '@/lib/format';
 import { PauseIcon, PlayIcon } from './icons';
 
@@ -16,11 +17,28 @@ export function VideoPlayer({
   postId,
   durationS,
   url,
+  placeholderLabel = 'Sample clip · no footage',
+  onViewed,
 }: {
   postId: string;
   durationS: number;
   url: string | null;
+  placeholderLabel?: string;
+  /** Called with the post's new view count the first time it is played. */
+  onViewed?: (views: number) => void;
 }) {
+  // A view is counted once per page load, when the video is first played.
+  const counted = useRef(false);
+  const count = (): void => {
+    if (counted.current) return;
+    counted.current = true;
+    recordView(postId)
+      .then((result) => onViewed?.(result.views))
+      .catch(() => {
+        counted.current = false;
+      });
+  };
+
   return (
     <div
       data-testid={X_TESTID.videoPlayer}
@@ -33,16 +51,27 @@ export function VideoPlayer({
           controls
           playsInline
           preload="metadata"
+          onPlay={count}
           className="h-full w-full object-contain"
         />
       ) : (
-        <PlaceholderClip postId={postId} durationS={durationS} />
+        <PlaceholderClip postId={postId} durationS={durationS} label={placeholderLabel} onPlay={count} />
       )}
     </div>
   );
 }
 
-function PlaceholderClip({ postId, durationS }: { postId: string; durationS: number }) {
+function PlaceholderClip({
+  postId,
+  durationS,
+  label,
+  onPlay,
+}: {
+  postId: string;
+  durationS: number;
+  label: string;
+  onPlay: () => void;
+}) {
   const [playing, setPlaying] = useState(false);
   const hue = hueFor(postId);
 
@@ -54,12 +83,15 @@ function PlaceholderClip({ postId, durationS }: { postId: string; durationS: num
       }}
     >
       <span className="absolute left-3 top-3 rounded bg-black/60 px-1.5 py-0.5 text-[12px] font-medium text-white">
-        Sample clip · no footage
+        {label}
       </span>
 
       <button
         type="button"
-        onClick={() => setPlaying((p) => !p)}
+        onClick={() => {
+          if (!playing) onPlay();
+          setPlaying((p) => !p);
+        }}
         aria-label={playing ? 'Pause' : 'Play'}
         className="absolute left-1/2 top-1/2 flex h-14 w-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-accent text-on-accent transition-colors hover:bg-accent-hover"
       >

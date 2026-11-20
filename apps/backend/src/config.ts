@@ -10,11 +10,7 @@
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import {
-  ARC_TESTNET,
-  GATEWAY_FACILITATOR_URL_TESTNET,
-  CIRCLE_FACILITATOR_URL,
-} from '@parrot/shared';
+import { ARC_TESTNET } from '@parrot/shared';
 
 /** apps/backend/src/config.ts -> the repository root. */
 const REPO_ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../../..');
@@ -42,19 +38,12 @@ const boolish = z
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   BACKEND_PORT: z.coerce.number().int().positive().default(8787),
   PUBLIC_WEB_URL: z.string().url().default('http://localhost:3100'),
   PUBLIC_BACKEND_URL: z.string().url().default('http://localhost:8787'),
   /** Where the local X stand-in (apps/x-clone) is served. Used for permalinks. */
   PUBLIC_XCLONE_URL: z.string().url().default('http://localhost:3200'),
   DEMO_MODE: boolish,
-  /**
-   * Skip the agents' profit-margin test so any job within their spend caps gets
-   * dubbed. Budget floors, per-job and daily caps, and language focus still
-   * apply. For demos and testing; off by default.
-   */
-  FORCE_DUB: boolish,
 
   // --- Accounts: sign-in and per-user wallets -------------------------------
   /** SQLite file for users and sessions. On Fly this lives on the /data volume. */
@@ -82,39 +71,33 @@ const envSchema = z.object({
   /** At most this many new wallets are funded per UTC day, so the Treasury is bounded. */
   SIGNUP_DAILY_LIMIT: z.coerce.number().int().nonnegative().default(25),
   /**
-   * In production the /api/demo/* write routes are closed unless this is set,
+   * In production the demo controls are closed unless this is set,
    * and then require it in an `x-admin-token` header. Unset in development.
    */
   DEMO_ADMIN_TOKEN: optionalString,
   /**
-   * Optional global clamp on every agent's daily spend, in USD ("3.00"). Bounds
-   * the worst-case ElevenLabs bill of a public deployment. Never raises a cap.
+   * The most Parrot will spend on dubs in one UTC day, in USD ("3.00"). Bounds
+   * the worst-case ElevenLabs bill of a public deployment. Unset = no limit.
    */
-  AGENT_DAILY_CAP_USD: optionalString,
+  DAILY_DUB_SPEND_CAP_USD: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v.trim() === '' ? undefined : v.trim()))
+    .refine((v) => v === undefined || /^\d{1,6}(\.\d{1,2})?$/.test(v), {
+      message: 'DAILY_DUB_SPEND_CAP_USD must be a dollar amount like "3.00"',
+    }),
 
   ARC_RPC_URL: z.string().url().default(ARC_TESTNET.rpcUrl),
+  /** A faster RPC endpoint for Arc, if you have one. Used instead of ARC_RPC_URL. */
   QUICKNODE_ARC_RPC_URL: optionalString,
 
-  PARROT_REVENUE_PRIVATE_KEY: optionalKeySchema,
-  PARROT_TREASURY_PRIVATE_KEY: optionalKeySchema,
-  AGENT_MAGPIE_PRIVATE_KEY: optionalKeySchema,
-  AGENT_KESTREL_PRIVATE_KEY: optionalKeySchema,
-  AGENT_FINCH_PRIVATE_KEY: optionalKeySchema,
-  VIEWER_POOL_PRIVATE_KEY: optionalKeySchema,
-  COST_SINK_ADDRESS: optionalString,
   /**
-   * ParrotSplitter contract (npm run deploy:splitter). When set, auctions are
-   * recorded on-chain and each unlock is split by the contract straight to the
-   * creator and the winning agent.
+   * Parrot's own wallet: where creators' payments for views arrive. Only its
+   * address is used for that; the key is never used to spend.
    */
-  SPLITTER_ADDRESS: optionalString,
-
-  GATEWAY_FACILITATOR_URL: z.string().url().default(GATEWAY_FACILITATOR_URL_TESTNET),
-  CIRCLE_FACILITATOR_URL: z.string().url().default(CIRCLE_FACILITATOR_URL),
-  PAYMENT_MODE: z.enum(['gateway', 'facilitator']).default('gateway'),
-
-  CIRCLE_API_KEY: optionalString,
-  CIRCLE_ENTITY_SECRET: optionalString,
+  PARROT_REVENUE_PRIVATE_KEY: optionalKeySchema,
+  /** Funds each new account's starting balance (see users/wallet-service.ts). */
+  PARROT_TREASURY_PRIVATE_KEY: optionalKeySchema,
 
   ELEVENLABS_API_KEY: optionalString,
   ELEVENLABS_STT_MODEL: z.string().default('scribe_v3'),
@@ -133,14 +116,13 @@ const envSchema = z.object({
   XAI_API_KEY: optionalString,
   XAI_BASE_URL: z.string().url().default('https://api.x.ai/v1'),
   XAI_MODEL: z.string().default('grok-4.3'),
-
-  QUICKNODE_API_KEY: optionalString,
-  QUICKNODE_STREAM_SECURITY_TOKEN: optionalString,
-  QUICKNODE_WEBHOOK_URL: optionalString,
-
-  REASONING_PROVIDER: z.enum(['anthropic', 'gemini', 'none']).default('none'),
-  ANTHROPIC_API_KEY: optionalString,
-  GEMINI_API_KEY: optionalString,
+  /** xAI speech-to-text model, used by QC to hear dubs it did not make. */
+  XAI_STT_MODEL: z.string().default('grok-voice-transcribe-2.0'),
+  /**
+   * Path to ffmpeg (ffprobe must sit next to it). QC measures every dub's real
+   * length and audio with these; without them a real dub is not published.
+   */
+  FFMPEG_PATH: optionalString,
 
   /**
    * Relative paths are taken from the REPO ROOT, as written in .env.example.
@@ -158,20 +140,16 @@ export type Env = z.infer<typeof envSchema>;
 let cached: Config | undefined;
 
 export interface Capabilities {
-  /** Real USDC transfers on Arc testnet are possible. */
-  readonly onchainSettlement: boolean;
-  /** Real x402 unlocks can be taken from viewers. */
-  readonly x402Payments: boolean;
+  /** Real USDC payments on Arc testnet are possible. */
+  readonly onchainPayments: boolean;
   /** Real dubs can be produced. */
   readonly dubbing: boolean;
-  /** The QC language gate can actually run. */
-  readonly qcLanguageDetection: boolean;
+  /** The quality check can actually hear a dub. */
+  readonly qcSpeechChecks: boolean;
   /** Mentions are read from, and replies posted to, the real X API. */
   readonly xApi: boolean;
-  /** Grok parses mentions (vs. the regex fallback). */
-  readonly grokParsing: boolean;
-  /** The live chain feed is wired up. */
-  readonly quicknodeStream: boolean;
+  /** Grok reads requests, replies and results (vs. the built-in fallbacks). */
+  readonly grok: boolean;
 }
 
 export interface Config {
@@ -194,31 +172,25 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
   const env = parsed.data;
 
   const capabilities: Capabilities = {
-    onchainSettlement:
-      env.PARROT_REVENUE_PRIVATE_KEY !== undefined &&
-      env.PARROT_TREASURY_PRIVATE_KEY !== undefined,
-    x402Payments:
-      env.PARROT_REVENUE_PRIVATE_KEY !== undefined && env.VIEWER_POOL_PRIVATE_KEY !== undefined,
+    onchainPayments:
+      env.PARROT_REVENUE_PRIVATE_KEY !== undefined && env.PARROT_TREASURY_PRIVATE_KEY !== undefined,
     dubbing: env.ELEVENLABS_API_KEY !== undefined,
-    qcLanguageDetection: env.ELEVENLABS_API_KEY !== undefined,
+    // QC hears dubs through xAI, never through the company that made them.
+    qcSpeechChecks: env.XAI_API_KEY !== undefined,
     xApi:
       env.X_ENABLED &&
       env.X_BEARER_TOKEN !== undefined &&
       env.X_ACCESS_TOKEN !== undefined &&
       env.X_BOT_USER_ID !== undefined,
-    grokParsing: env.XAI_API_KEY !== undefined,
-    quicknodeStream:
-      env.QUICKNODE_API_KEY !== undefined && env.QUICKNODE_STREAM_SECURITY_TOKEN !== undefined,
+    grok: env.XAI_API_KEY !== undefined,
   };
 
   const mockedSubsystems: string[] = [];
-  if (!capabilities.onchainSettlement) mockedSubsystems.push('on-chain settlement (simulated)');
-  if (!capabilities.x402Payments) mockedSubsystems.push('viewer payments (simulated)');
-  if (!capabilities.dubbing) mockedSubsystems.push('dubbing (fixture audio)');
-  if (!capabilities.qcLanguageDetection) mockedSubsystems.push('QC language detection (heuristic)');
-  if (!capabilities.xApi) mockedSubsystems.push('X (local clone, not x.com)');
-  if (!capabilities.grokParsing) mockedSubsystems.push('intent parsing (regex fallback)');
-  if (!capabilities.quicknodeStream) mockedSubsystems.push('chain feed (RPC polling)');
+  if (!capabilities.onchainPayments) mockedSubsystems.push('payments (demo balances only, nothing sent on Arc)');
+  if (!capabilities.dubbing) mockedSubsystems.push('dubbing (stand-in audio, not real dubs)');
+  if (!capabilities.qcSpeechChecks) mockedSubsystems.push('quality check (cannot hear dubs, so real dubs cannot go live)');
+  if (!capabilities.xApi) mockedSubsystems.push('X (the local stand-in timeline, not x.com)');
+  if (!capabilities.grok) mockedSubsystems.push('Grok (built-in fallbacks read requests and replies)');
 
   return {
     env,
@@ -244,20 +216,6 @@ export function loadDotEnv(path = resolve(REPO_ROOT, '.env')): boolean {
     // No .env: fine, everything falls back to its documented default.
     return false;
   }
-}
-
-/**
- * An agent persona's signing key, if one is configured. The agent fronts its
- * dub cost from this wallet, so its spending is visible on-chain.
- */
-export function agentPrivateKey(agentName: string): `0x${string}` | undefined {
-  const env = getConfig().env;
-  const keys: Record<string, string | undefined> = {
-    Magpie: env.AGENT_MAGPIE_PRIVATE_KEY,
-    Kestrel: env.AGENT_KESTREL_PRIVATE_KEY,
-    Finch: env.AGENT_FINCH_PRIVATE_KEY,
-  };
-  return keys[agentName] as `0x${string}` | undefined;
 }
 
 export function getConfig(): Config {

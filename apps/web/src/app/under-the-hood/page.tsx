@@ -1,243 +1,140 @@
 import type { Metadata } from 'next';
-import {
-  ARC_TESTNET,
-  GATEWAY_WALLET_ADDRESS,
-  USDC_ADDRESS,
-  addressUrl,
-  technicalCopy,
-} from '@parrot/shared';
-import { getAgents, getSystemStatus } from '@/lib/api';
-import { Panel } from '@/components/ui';
-
-/**
- * JUDGES ONLY. This page is the documented exception to the vocabulary rule and
- * is the only screen allowed to use `technicalCopy`. Nothing here is linked from
- * the viewer or creator flows except through the global navigation.
- */
+import { technicalCopy } from '@parrot/shared';
+import { getSystemStatus } from '@/lib/api';
+import { Panel, Stat, StatGrid } from '@/components/ui';
 
 export const dynamic = 'force-dynamic';
-
 export const metadata: Metadata = { title: technicalCopy.underTheHoodTitle };
 
+/**
+ * For judges and the curious. This is the one page allowed to say "wallet",
+ * "USDC" and "on-chain": everywhere else the product keeps that out of sight.
+ */
 export default async function UnderTheHoodPage() {
-  const [{ data: status }, { data: dashboard }] = await Promise.all([
-    getSystemStatus(),
-    getAgents(),
-  ]);
+  const status = await getSystemStatus();
 
-  const caps: Array<[string, boolean]> = [
-    ['On-chain settlement', status.capabilities.onchainSettlement],
-    ['x402 payments', status.capabilities.x402Payments],
-    ['ElevenLabs dubbing', status.capabilities.dubbing],
-    ['QC language detection', status.capabilities.qcLanguageDetection],
-    ['X API', status.capabilities.xApi],
-    ['Grok parsing', status.capabilities.grokParsing],
-    ['QuickNode Stream', status.capabilities.quicknodeStream],
-  ];
+  if (!status) {
+    return (
+      <section className="panel">
+        <h1 style={{ fontSize: '1.6rem' }}>{technicalCopy.underTheHoodTitle}</h1>
+        <p style={{ color: 'var(--ink-soft)', marginTop: '0.5rem' }}>Parrot&apos;s server cannot be reached right now.</p>
+      </section>
+    );
+  }
 
-  const addresses: Array<[string, string | null]> = [
-    ['USDC (ERC-20 interface)', status.addresses.usdc || USDC_ADDRESS],
-    ['Circle Gateway Wallet', status.addresses.gatewayWallet || GATEWAY_WALLET_ADDRESS],
-    ['Revenue account', status.addresses.revenue],
-    ['Treasury account', status.addresses.treasury],
-  ];
+  const { pricing, chain, house } = status;
 
   return (
     <div className="stack" style={{ ['--stack' as string]: '1.5rem' }}>
-      <header className="stack" style={{ ['--stack' as string]: '0.5rem' }}>
+      <header className="stack" style={{ ['--stack' as string]: '0.4rem' }}>
         <span className="eyebrow">{technicalCopy.chainLabel}</span>
         <h1 style={{ fontSize: '2rem' }}>{technicalCopy.underTheHoodTitle}</h1>
-        <p style={{ color: 'var(--ink-soft)', maxWidth: '44rem' }}>
-          {technicalCopy.underTheHoodSubtitle}
-        </p>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-          <span className="chip chip-teal">
-            {technicalCopy.latestBlock}: {dashboard.feed.latestBlock ?? '—'}
-          </span>
-          <span className="chip">
-            {dashboard.feed.source === 'quicknode_stream'
-              ? technicalCopy.streamLive
-              : technicalCopy.streamStale}
-          </span>
-          <span className="chip">chainId {ARC_TESTNET.chainId}</span>
-          <a
-            className="btn btn-secondary"
-            href={status.explorerUrl || ARC_TESTNET.explorerUrl}
-            target="_blank"
-            rel="noreferrer noopener"
-          >
-            {technicalCopy.explorerCta}
-          </a>
-        </div>
+        <p style={{ color: 'var(--ink-soft)' }}>{technicalCopy.underTheHoodSubtitle}</p>
       </header>
 
-      <Panel title="Where the money goes">
-        <MoneyFlow />
-        <ul
-          style={{
-            margin: '1rem 0 0',
-            paddingLeft: '1.1rem',
-            color: 'var(--ink-soft)',
-            fontSize: '0.9rem',
-            display: 'grid',
-            gap: '0.35rem',
-          }}
-        >
-          <li>{technicalCopy.gatewayBatched}</li>
-          <li>{technicalCopy.offChainCostNote}</li>
-          <li>{technicalCopy.custodialNote}</li>
+      <Panel title="What is simulated right now">
+        {status.simulated.length === 0 ? (
+          <p>Nothing. Every subsystem is running for real.</p>
+        ) : (
+          <ul style={{ margin: 0, paddingLeft: '1.2rem', display: 'grid', gap: '0.35rem' }}>
+            {status.simulated.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        )}
+        <p className="note" style={{ marginTop: '0.75rem' }}>
+          Separately from this list: the seeded demo posts have no footage, so their dubs are always stand-ins, and the demo
+          audience is generated. Both are labelled wherever they appear.
+        </p>
+      </Panel>
+
+      <Panel title="The deal" subtitle="One set of numbers, used by the planner, the billing and every screen.">
+        <StatGrid>
+          <Stat label="A creator pays" value={pricing.pricePerThousand.display} hint="per 1,000 views a dub gets" />
+          <Stat label="A dub costs Parrot" value={pricing.dubCostPerMinute.display} hint="per minute, per language (ElevenLabs)" />
+          <Stat label="Default post budget" value={pricing.defaultPostBudget.display} hint="the most one post can cost a creator" />
+          <Stat label="Example view value" value={pricing.defaultValuePerThousand.display} hint="per 1,000 views, until a creator sets theirs" />
+        </StatGrid>
+        <ul style={{ margin: '1rem 0 0', paddingLeft: '1.2rem', display: 'grid', gap: '0.4rem', color: 'var(--ink-soft)' }}>
+          <li>
+            The first {pricing.explorePosts} posts are dubbed into {pricing.exploreLanguages} languages each. After that, up to{' '}
+            {pricing.maxWinners} proven languages plus one being tested.
+          </li>
+          <li>
+            A language is proven when its dubs average at least the views needed for the creator&apos;s payments to cover the
+            dub (a 30-second dub costs $0.25, so 250 views). It is dropped after falling short twice in a row, or once by a wide
+            margin.
+          </li>
+          <li>A creator&apos;s &quot;worth&quot; figures use their own rate. They are never money anyone received.</li>
         </ul>
       </Panel>
 
-      <Panel title="On-chain, batched, or simulated">
-        <div className="table-scroll">
-          <table className="data" style={{ minWidth: '28rem' }}>
-            <thead>
-              <tr>
-                <th>Capability</th>
-                <th>State</th>
-              </tr>
-            </thead>
-            <tbody>
-              {caps.map(([label, on]) => (
-                <tr key={label}>
-                  <td>{label}</td>
-                  <td>
-                    <span className={on ? 'chip chip-teal' : 'chip chip-berry'}>
-                      {on ? 'Live' : 'Simulated'}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <ul
-          style={{
-            margin: '1rem 0 0',
-            paddingLeft: '1.1rem',
-            color: 'var(--ink-soft)',
-            fontSize: '0.9rem',
-            display: 'grid',
-            gap: '0.35rem',
-          }}
-        >
-          {status.mocked.map((item) => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
+      <Panel title="Parrot's side of the deal" subtitle="Across every creator on this server.">
+        <StatGrid>
+          <Stat label="Dubs made" value={String(house.dubsMade)} />
+          <Stat label="Spent on dubs" value={house.dubSpend.display} tone="down" hint="at list price, stand-ins included" />
+          <Stat label="Collected for views" value={house.collected.display} tone="up" />
+          <Stat label="Net" value={house.net.display} tone={house.net.display.startsWith('-') ? 'down' : 'up'} />
+        </StatGrid>
+        <p className="note" style={{ marginTop: '0.75rem' }}>{technicalCopy.offChainCostNote}</p>
       </Panel>
 
-      <Panel title="Contract addresses" flush>
-        <div className="table-scroll">
-          <table className="data">
-            <thead>
-              <tr>
-                <th>What</th>
-                <th>Address</th>
-              </tr>
-            </thead>
-            <tbody>
-              {addresses.map(([label, addr]) => (
-                <tr key={label}>
-                  <td>{label}</td>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
-                    {addr ? (
-                      <a
-                        href={addressUrl(addr)}
-                        target="_blank"
-                        rel="noreferrer noopener"
-                        style={{ color: 'var(--sky)', textDecoration: 'underline', wordBreak: 'break-all' }}
-                      >
-                        {addr}
-                      </a>
-                    ) : (
-                      '—'
-                    )}
-                  </td>
-                </tr>
-              ))}
-              <tr>
-                <td>RPC</td>
-                <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', wordBreak: 'break-all' }}>
-                  {ARC_TESTNET.rpcUrl}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+      <Panel title="What is on Arc">
+        <ul style={{ margin: 0, paddingLeft: '1.2rem', display: 'grid', gap: '0.5rem' }}>
+          <li>
+            <strong>Every signed-in creator has an Arc wallet.</strong> It is created at sign-up and funded with a small amount
+            of testnet USDC. {technicalCopy.custodialNote}
+          </li>
+          <li>
+            <strong>Each payment for views is one USDC transfer</strong> from the creator&apos;s wallet to Parrot&apos;s, sent in
+            batches rather than per view. A confirmed payment links to its transaction; a payment from a demo balance never
+            does, because nothing was sent.
+          </li>
+          <li>{technicalCopy.gasNote}</li>
+        </ul>
+        <dl style={{ display: 'grid', gap: '0.5rem', marginTop: '1rem', fontSize: '0.9rem' }}>
+          <div>
+            <dt className="eyebrow">USDC on {chain.name}</dt>
+            <dd style={{ margin: 0, fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>
+              <a href={`${chain.explorerUrl}/address/${chain.usdcAddress}`} target="_blank" rel="noreferrer">
+                {chain.usdcAddress}
+              </a>
+            </dd>
+          </div>
+          <div>
+            <dt className="eyebrow">Where creators&apos; payments arrive</dt>
+            <dd style={{ margin: 0, fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>
+              {chain.revenueAddress && chain.revenueAddressUrl ? (
+                <a href={chain.revenueAddressUrl} target="_blank" rel="noreferrer">
+                  {chain.revenueAddress}
+                </a>
+              ) : (
+                'No wallet configured on this server: demo balances only.'
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt className="eyebrow">Accounts</dt>
+            <dd style={{ margin: 0 }}>{status.accounts ? 'On: people can sign in and pay from their own balance.' : 'Off on this server: creators use demo balances.'}</dd>
+          </div>
+        </dl>
+      </Panel>
+
+      <Panel title="Who does what">
+        <ul style={{ margin: 0, paddingLeft: '1.2rem', display: 'grid', gap: '0.5rem' }}>
+          <li>
+            <strong>ElevenLabs</strong> makes every dub (Dubbing API), one per language.
+          </li>
+          <li>
+            <strong>xAI / Grok</strong> does everything that checks or reads: it hears each dub and judges whether it says the
+            same thing as the original, reads creators&apos; requests, reads what language people reply in, and writes the short
+            summary on a creator&apos;s page. The company that made a dub never grades it.
+          </li>
+          <li>
+            <strong>Arc</strong> carries the money: creators&apos; wallets, and their payments for views.
+          </li>
+        </ul>
       </Panel>
     </div>
-  );
-}
-
-/** The money-flow diagram: viewer -> gateway -> creator / agent, cost off to the side. */
-function MoneyFlow() {
-  const boxes = [
-    { x: 8, label: 'Viewer', sub: '$0.02 unlock' },
-    { x: 180, label: 'Gateway', sub: 'batched off-chain' },
-    { x: 352, label: 'Arc', sub: 'on-chain settlement' },
-  ];
-
-  return (
-    <svg viewBox="0 0 620 230" width="100%" role="img" aria-label="Money flow diagram" style={{ display: 'block' }}>
-      <defs>
-        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-          <path d="M0 0 L10 5 L0 10 z" fill="var(--ink-faint)" />
-        </marker>
-      </defs>
-
-      {boxes.map((b) => (
-        <g key={b.label}>
-          <rect
-            x={b.x}
-            y={28}
-            width={150}
-            height={64}
-            rx={14}
-            fill="var(--paper-sunk)"
-            stroke="var(--rule-strong)"
-          />
-          <text x={b.x + 16} y={56} fontSize="15" fontWeight="650" fill="var(--ink)">
-            {b.label}
-          </text>
-          <text x={b.x + 16} y={76} fontSize="12" fill="var(--ink-soft)">
-            {b.sub}
-          </text>
-        </g>
-      ))}
-
-      <line x1={160} y1={60} x2={176} y2={60} stroke="var(--ink-faint)" strokeWidth="2" markerEnd="url(#arrow)" />
-      <line x1={332} y1={60} x2={348} y2={60} stroke="var(--ink-faint)" strokeWidth="2" markerEnd="url(#arrow)" />
-
-      <rect x={180} y={146} width={150} height={64} rx={14} fill="var(--teal-wash)" stroke="var(--teal)" />
-      <text x={196} y={174} fontSize="15" fontWeight="650" fill="var(--ink)">
-        Creator
-      </text>
-      <text x={196} y={194} fontSize="12" fill="var(--ink-soft)">
-        60% — $0.012
-      </text>
-
-      <rect x={352} y={146} width={150} height={64} rx={14} fill="var(--mango-wash)" stroke="var(--mango)" />
-      <text x={368} y={174} fontSize="15" fontWeight="650" fill="var(--ink)">
-        Agent
-      </text>
-      <text x={368} y={194} fontSize="12" fill="var(--ink-soft)">
-        40% — $0.008
-      </text>
-
-      <line x1={427} y1={96} x2={427} y2={142} stroke="var(--ink-faint)" strokeWidth="2" markerEnd="url(#arrow)" />
-      <path d="M400 96 L400 120 L255 120 L255 142" fill="none" stroke="var(--ink-faint)" strokeWidth="2" markerEnd="url(#arrow)" />
-
-      <rect x={520} y={28} width={92} height={64} rx={14} fill="var(--paper-sunk)" stroke="var(--rule-strong)" strokeDasharray="5 4" />
-      <text x={534} y={56} fontSize="13" fontWeight="650" fill="var(--ink)">
-        ElevenLabs
-      </text>
-      <text x={534} y={74} fontSize="11" fill="var(--ink-soft)">
-        $0.40 fiat
-      </text>
-      <line x1={502} y1={178} x2={566} y2={178} stroke="var(--ink-faint)" strokeWidth="2" strokeDasharray="5 4" />
-      <path d="M566 178 L566 96" fill="none" stroke="var(--ink-faint)" strokeWidth="2" strokeDasharray="5 4" markerEnd="url(#arrow)" />
-    </svg>
   );
 }

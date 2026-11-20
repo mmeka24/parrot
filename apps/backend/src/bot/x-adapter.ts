@@ -54,6 +54,18 @@ export interface XAdapter {
   /** The source post, with video and metrics, or null if it is gone or unreadable. */
   getPost(postId: string): Promise<SourcePost | null>;
   reply(inReplyToId: string, text: string): Promise<PostedReply>;
+  /**
+   * The replies directly under a post. Optional: the real adapter does not
+   * implement it (it would need a paid search call per dub), so with it the
+   * "what language did people reply in" figures are simply absent.
+   */
+  listReplies?(postId: string): Promise<PostReply[]>;
+}
+
+export interface PostReply {
+  readonly id: string;
+  readonly text: string;
+  readonly authorHandle: string;
 }
 
 // ---------------------------------------------------------------------------

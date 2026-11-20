@@ -2,9 +2,7 @@
  * Glue between sign-in, wallets and the rest of the backend.
  *
  * The rest of the backend thinks in "accounts" with an in-memory ledger. A
- * signed-in user is an account whose id is the user's id, so everything that
- * already works for a viewer (unlock records, receipts, the ledger) works for
- * them unchanged.
+ * signed-in user is an account whose id is the user's id.
  *
  * The one thing to keep true: for a signed-in user the REAL balance is the
  * on-chain one. `syncLedger` aligns the ledger to it before anything that
@@ -72,8 +70,8 @@ export class Accounts {
     if (existing) return existing;
     return this.o.store.createAccount({
       id: user.id,
-      kind: 'viewer',
-      label: user.email.split('@')[0] ?? 'Viewer',
+      kind: 'creator',
+      label: user.email.split('@')[0] ?? 'Creator',
       email: user.email,
       walletAddress: user.walletAddress,
     });

@@ -1,30 +1,20 @@
 /**
  * The one place the web app talks to the backend.
  *
- * Every endpoint in the contract gets exactly one typed function here. If
- * NEXT_PUBLIC_BACKEND_URL is unset, or the request fails or times out, the
- * function falls back to the local fixtures. That is what makes
- * `npm run dev -w @parrot/web` a complete, browsable product with nothing else
- * running.
+ * Every endpoint in the contract gets exactly one typed function here. A read
+ * that fails resolves to null and the page says the server could not be
+ * reached; nothing is ever filled in with made-up data.
  */
 
 import type {
-  AgentDashboardDto,
   ApiErrorDto,
-  BotConsoleDto,
-  BotPostDto,
   CreatorDashboardDto,
-  DemoStateDto,
   DubPageDto,
-  InjectMentionRequestDto,
-  InjectMentionResponseDto,
-  MoneyDto,
-  ReceiptDto,
+  MeDto,
+  StartDubResponseDto,
   SystemStatusDto,
-  UnlockResponseDto,
+  UpdateSettingsRequestDto,
 } from '@parrot/shared';
-import * as fixtures from './fixtures';
-import { money } from './money';
 
 const RAW_BASE = process.env.NEXT_PUBLIC_BACKEND_URL ?? '';
 const BASE = RAW_BASE.trim().replace(/\/$/, '');
@@ -32,11 +22,7 @@ const BASE = RAW_BASE.trim().replace(/\/$/, '');
 /** True when a backend address is configured at all. */
 export const backendConfigured = BASE.length > 0;
 
-const TIMEOUT_MS = 2500;
-/** An unlock waits for its payment to confirm on-chain, so it gets longer. */
-const UNLOCK_TIMEOUT_MS = 20_000;
-
-export type Sourced<T> = { readonly data: T; readonly live: boolean };
+const TIMEOUT_MS = 6_000;
 
 interface RequestOptions {
   readonly timeoutMs?: number;
@@ -67,21 +53,13 @@ function serverBase(): string {
   return direct && direct.length > 0 ? direct : BASE;
 }
 
-async function request<T>(
-  path: string,
-  init?: RequestInit,
-  options: RequestOptions = {},
-): Promise<T | null> {
+async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T | null> {
   if (!backendConfigured) return null;
   try {
     const forwarded = await serverCookies();
-    // On the server, go straight to the backend. The browser uses BASE, which in
-    // production is this site's own address (proxied), so its cookies are first-party.
     const res = await fetch(serverBase() + path, {
       ...init,
       cache: 'no-store',
-      // The viewer is identified by a cookie the backend sets; without this the
-      // browser neither sends nor keeps it, and every unlock is a new viewer.
       credentials: 'include',
       signal: AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS),
       headers: {
@@ -101,174 +79,71 @@ async function request<T>(
   }
 }
 
-async function getOr<T>(path: string, fallback: () => T): Promise<Sourced<T>> {
-  const live = await request<T>(path);
-  return live === null ? { data: fallback(), live: false } : { data: live, live: true };
-}
+export type Failure = { readonly ok: false; readonly title: string; readonly detail: string };
 
-// ---------------------------------------------------------------------------
-// GET /api/system
-// ---------------------------------------------------------------------------
-
-export function getSystemStatus(): Promise<Sourced<SystemStatusDto>> {
-  return getOr<SystemStatusDto>('/api/system', () => fixtures.systemStatus);
-}
-
-// ---------------------------------------------------------------------------
-// GET /api/dubs/:id
-// ---------------------------------------------------------------------------
-
-export function getDub(id: string): Promise<Sourced<DubPageDto>> {
-  return getOr<DubPageDto>('/api/dubs/' + encodeURIComponent(id), () => fixtures.dubPage(id));
-}
-
-// ---------------------------------------------------------------------------
-// POST /api/dubs/:id/unlock
-// ---------------------------------------------------------------------------
-
-/**
- * Ids that make the offline demo reproduce a specific failure, so every error
- * state in the contract is reachable without a backend.
- */
-const OFFLINE_FAILURES: Readonly<Record<string, ApiErrorDto>> = {
-  demo_no_credit: {
-    ok: false,
-    code: 'INSUFFICIENT_BALANCE',
-    title: 'Not enough credit',
-    detail: 'Your test credit has run out. In the real thing you would top up here.',
-  },
-  demo_payment_failed: {
-    ok: false,
-    code: 'PAYMENT_FAILED',
-    title: 'The unlock did not go through',
-    detail: 'You have not been charged. Tap to try once more.',
-  },
-  demo_rate_limited: {
-    ok: false,
-    code: 'RATE_LIMITED',
-    title: 'One moment',
-    detail: 'That is a lot of unlocks very quickly. Give it a few seconds and try again.',
-  },
+const UNREACHABLE: Failure = {
+  ok: false,
+  title: 'We could not reach Parrot',
+  detail: 'Check your connection and try again.',
 };
 
-export async function unlockDub(
-  id: string,
-  dub?: DubPageDto,
-): Promise<UnlockResponseDto | ApiErrorDto> {
-  const live = await request<UnlockResponseDto | ApiErrorDto>(
-    '/api/dubs/' + encodeURIComponent(id) + '/unlock',
-    { method: 'POST', body: '{}' },
-    { timeoutMs: UNLOCK_TIMEOUT_MS, passErrors: true },
+async function post<T extends { ok: true }>(path: string, body: unknown, timeoutMs = 20_000): Promise<T | Failure> {
+  const result = await request<T | ApiErrorDto>(
+    path,
+    { method: 'POST', body: JSON.stringify(body ?? {}) },
+    { passErrors: true, timeoutMs },
   );
-  if (live !== null) return live;
-
-  // A real backend that did not answer is NOT the offline demo: the payment
-  // may or may not have gone through, so never show a made-up "Unlock paid".
-  // Retrying is safe - the backend never charges twice for the same dub.
-  if (backendConfigured) {
-    return {
-      ok: false,
-      code: 'PAYMENT_FAILED',
-      title: 'The unlock did not go through',
-      detail: 'We could not reach Parrot. Try again - you will not be charged twice.',
-    };
-  }
-
-  const forced = OFFLINE_FAILURES[id];
-  if (forced) return forced;
-
-  const page = dub ?? fixtures.dubPage(id);
-  if (page.previewUrl === null) {
-    return {
-      ok: false,
-      code: 'NOT_PUBLISHED',
-      title: 'This dub is not ready',
-      detail: 'It may still be rendering, or it did not pass our quality checks.',
-    };
-  }
-
-  const receipt: ReceiptDto = {
-    id: 'rcpt_unlock_now',
-    title: 'Unlock paid',
-    detail: 'You paid ' + page.price.display + ' to watch this in ' + page.targetLanguageName + '.',
-    amount: page.price,
-    at: new Date().toISOString(),
-    status: 'pending',
-    verifyUrl: null,
-    simulated: true,
-  };
-
-  return {
-    ok: true,
-    fullUrl: page.previewUrl,
-    // Pre-formatted by the server in the real thing; the UI never computes it.
-    viewerBalance: money('980000', '$0.98'),
-    receipt,
-  };
+  return result ?? UNREACHABLE;
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/creators/:handle
+// Reads
 // ---------------------------------------------------------------------------
 
-export function getCreator(handle: string): Promise<Sourced<CreatorDashboardDto>> {
-  return getOr<CreatorDashboardDto>('/api/creators/' + encodeURIComponent(handle), () =>
-    handle.toLowerCase() === 'newcomer'
-      ? fixtures.emptyCreatorDashboard(handle)
-      : fixtures.creatorDashboard(handle),
-  );
+export function getSystemStatus(): Promise<SystemStatusDto | null> {
+  return request<SystemStatusDto>('/api/system');
+}
+
+export function getCreator(handle: string): Promise<CreatorDashboardDto | null> {
+  return request<CreatorDashboardDto>('/api/creators/' + encodeURIComponent(handle));
+}
+
+export function getDub(id: string): Promise<DubPageDto | null> {
+  return request<DubPageDto>('/api/dubs/' + encodeURIComponent(id));
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/agents
+// A creator's actions
 // ---------------------------------------------------------------------------
 
-export function getAgents(): Promise<Sourced<AgentDashboardDto>> {
-  return getOr<AgentDashboardDto>('/api/agents', () => fixtures.agentDashboard);
+const creatorPath = (handle: string): string => '/api/creators/' + encodeURIComponent(handle);
+
+export function updateSettings(handle: string, body: UpdateSettingsRequestDto): Promise<{ ok: true } | Failure> {
+  return post<{ ok: true }>(creatorPath(handle) + '/settings', body);
 }
 
-// ---------------------------------------------------------------------------
-// GET /api/bot  and  POST /api/bot/mention
-// ---------------------------------------------------------------------------
-
-export function getBotConsole(): Promise<Sourced<BotConsoleDto>> {
-  return getOr<BotConsoleDto>('/api/bot', () => fixtures.botConsole);
+export function startDub(handle: string, postId: string, languageCode?: string | null): Promise<StartDubResponseDto | Failure> {
+  return post<StartDubResponseDto>(creatorPath(handle) + '/dub', { postId, languageCode: languageCode ?? null });
 }
 
-export async function injectMention(
-  body: InjectMentionRequestDto,
-): Promise<readonly BotPostDto[] | null> {
-  const live = await request<InjectMentionResponseDto>('/api/bot/mention', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-  return live?.posts ?? null;
+export function sendDemoAudience(handle: string, postId: string): Promise<{ ok: true } | Failure> {
+  return post<{ ok: true }>(creatorPath(handle) + '/posts/' + encodeURIComponent(postId) + '/audience', {});
 }
 
-// ---------------------------------------------------------------------------
-// GET /api/demo  and  POST /api/demo/traffic
-// ---------------------------------------------------------------------------
-
-export function getDemoState(): Promise<Sourced<DemoStateDto>> {
-  return getOr<DemoStateDto>('/api/demo', () => fixtures.demoState);
+export function payNow(handle: string): Promise<{ ok: true } | Failure> {
+  // Waits for the payment to confirm, so it gets longer.
+  return post<{ ok: true }>(creatorPath(handle) + '/pay', {}, 120_000);
 }
 
-export async function setDemoTraffic(running: boolean): Promise<DemoStateDto | null> {
-  return request<DemoStateDto>('/api/demo/traffic', {
-    method: 'POST',
-    body: JSON.stringify({ running }),
-  });
+/** Count this browser as a viewer of a dub. Safe to call more than once. */
+export function recordDubView(id: string): Promise<{ ok: true; counted: boolean } | Failure> {
+  return post<{ ok: true; counted: boolean }>('/api/dubs/' + encodeURIComponent(id) + '/view', {});
 }
 
-// ---------------------------------------------------------------------------
-// GET /api/stream (SSE)
-// ---------------------------------------------------------------------------
-
-/** The stream address, or null when there is no backend to stream from. */
+/** The live event stream, or null when there is no backend to stream from. */
 export function streamUrl(): string | null {
   return backendConfigured ? BASE + '/api/stream' : null;
 }
-
 
 // ---------------------------------------------------------------------------
 // Accounts: /api/auth/config, /api/me, sign in, sign out
@@ -281,13 +156,7 @@ export interface AuthConfig {
   readonly bonus: string;
 }
 
-export interface Me {
-  readonly signedIn: boolean;
-  readonly email?: string;
-  readonly balance?: MoneyDto | null;
-  /** 'funded' once the starting balance has arrived. */
-  readonly funding?: 'none' | 'pending' | 'funded' | 'failed';
-}
+export type Me = MeDto;
 
 /** Null when this server does not have accounts turned on. */
 export async function getAuthConfig(): Promise<AuthConfig | null> {
@@ -299,28 +168,17 @@ export async function getMe(): Promise<Me> {
   return (await request<Me>('/api/me')) ?? { signedIn: false };
 }
 
-type Failure = { readonly ok: false; readonly title: string; readonly detail: string };
-
-export async function startEmailSignIn(email: string): Promise<{ ok: true } | Failure> {
-  const result = await request<{ ok: true } | Failure>(
-    '/api/auth/email/start',
-    { method: 'POST', body: JSON.stringify({ email }) },
-    { passErrors: true, timeoutMs: 15_000 },
-  );
-  return (
-    result ?? { ok: false, title: 'We could not reach Parrot', detail: 'Check your connection and try again.' }
-  );
+export function startEmailSignIn(email: string): Promise<{ ok: true } | Failure> {
+  return post<{ ok: true }>('/api/auth/email/start', { email }, 15_000);
 }
 
-export async function verifyEmailSignIn(token: string): Promise<{ ok: true; created: boolean } | Failure> {
-  const result = await request<{ ok: true; created: boolean } | Failure>(
-    '/api/auth/email/verify',
-    { method: 'POST', body: JSON.stringify({ token }) },
-    { passErrors: true, timeoutMs: 15_000 },
-  );
-  return (
-    result ?? { ok: false, title: 'We could not reach Parrot', detail: 'Check your connection and try again.' }
-  );
+export function verifyEmailSignIn(token: string): Promise<{ ok: true; created: boolean } | Failure> {
+  return post<{ ok: true; created: boolean }>('/api/auth/email/verify', { token }, 15_000);
+}
+
+/** Connect the name you post under to your account. */
+export function connectHandle(handle: string): Promise<{ ok: true; handle: string } | Failure> {
+  return post<{ ok: true; handle: string }>('/api/me/creator', { handle });
 }
 
 export async function signOut(): Promise<void> {

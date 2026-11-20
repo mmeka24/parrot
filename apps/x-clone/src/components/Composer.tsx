@@ -69,7 +69,7 @@ export function Composer({
   const [text, setText] = useState('');
   const [attachment, setAttachment] = useState<Attachment | null>(null);
   // Demo reach for a video post. A post written a moment ago has no views, so
-  // the agents would pass on it; this gives it the reach a viral clip has.
+  // nothing can be learned from it; this gives it the reach a viral clip has.
   const [reach, setReach] = useState<number>(1_200_000);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

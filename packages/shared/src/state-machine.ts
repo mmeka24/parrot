@@ -1,140 +1,71 @@
 /**
- * The job state machine. One typed reducer is the ONLY way a job changes state.
+ * The life of one dub (one post, in one language).
  *
- *   REQUESTED -> PARSED -> EVALUATING -> DECLINED
- *                                     -> APPROVED -> DUBBING -> QC -> REJECTED_BY_QC
- *                                                                  -> PUBLISHED -> EARNING <-> SETTLED
- *   ...and FAILED from any non-terminal state, always with a reason.
+ *   QUEUED -> DUBBING -> QC -> PUBLISHED
+ *                           -> REJECTED_BY_QC
+ *   ...and FAILED from any state before PUBLISHED, always with a reason.
  *
- * EARNING <-> SETTLED is deliberately two-way: SETTLED means "everything ledgered
- * so far has been paid out on-chain", and a new unlock legitimately moves the job
- * back to EARNING. Modelling it as a one-way terminal state would have forced us
- * to lie about jobs that keep earning after their first settlement.
- *
- * Every accepted transition produces an append-only event row, which is what
- * powers the dashboard timeline and decides what the bot says.
+ * `transition` is the only way a dub changes state, so a dub can never be
+ * published without having been through the quality check.
  */
 
-export const JOB_STATES = [
-  'REQUESTED',
-  'PARSED',
-  'EVALUATING',
-  'DECLINED',
-  'APPROVED',
-  'DUBBING',
-  'QC',
-  'REJECTED_BY_QC',
-  'PUBLISHED',
-  'EARNING',
-  'SETTLED',
-  'FAILED',
-] as const;
+export const DUB_STATES = ['QUEUED', 'DUBBING', 'QC', 'PUBLISHED', 'REJECTED_BY_QC', 'FAILED'] as const;
+export type DubState = (typeof DUB_STATES)[number];
 
-export type JobState = (typeof JOB_STATES)[number];
+/** States from which nothing more happens to the dub itself. */
+export const FINAL_STATES = ['PUBLISHED', 'REJECTED_BY_QC', 'FAILED'] as const;
 
-/** States from which no further progress is possible. */
-export const TERMINAL_STATES = ['DECLINED', 'REJECTED_BY_QC', 'FAILED'] as const;
-export type TerminalState = (typeof TERMINAL_STATES)[number];
-
-export function isTerminal(state: JobState): state is TerminalState {
-  return (TERMINAL_STATES as readonly string[]).includes(state);
+export function isFinal(state: DubState): boolean {
+  return (FINAL_STATES as readonly string[]).includes(state);
 }
 
-export const JOB_EVENT_TYPES = [
-  'PARSED',
-  'EVALUATION_STARTED',
-  'DECLINED',
-  'APPROVED',
-  'DUBBING_STARTED',
-  'DUB_RENDERED',
-  'QC_PASSED',
-  'QC_FAILED',
-  'FIRST_UNLOCK',
-  'SETTLED',
-  'UNLOCKED_AFTER_SETTLEMENT',
-  'FAILED',
-] as const;
+export function isPublished(state: DubState): boolean {
+  return state === 'PUBLISHED';
+}
 
-export type JobEventType = (typeof JOB_EVENT_TYPES)[number];
-
-/**
- * The transition table. `from` states map to the events they accept and the
- * state each event produces. Anything not listed here is rejected.
- */
-const TRANSITIONS: Readonly<Record<JobState, Partial<Record<JobEventType, JobState>>>> = {
-  REQUESTED: { PARSED: 'PARSED', FAILED: 'FAILED' },
-  PARSED: { EVALUATION_STARTED: 'EVALUATING', FAILED: 'FAILED' },
-  EVALUATING: { DECLINED: 'DECLINED', APPROVED: 'APPROVED', FAILED: 'FAILED' },
-  APPROVED: { DUBBING_STARTED: 'DUBBING', FAILED: 'FAILED' },
-  DUBBING: { DUB_RENDERED: 'QC', FAILED: 'FAILED' },
-  QC: { QC_PASSED: 'PUBLISHED', QC_FAILED: 'REJECTED_BY_QC', FAILED: 'FAILED' },
-  PUBLISHED: { FIRST_UNLOCK: 'EARNING', FAILED: 'FAILED' },
-  EARNING: { SETTLED: 'SETTLED', FAILED: 'FAILED' },
-  SETTLED: { UNLOCKED_AFTER_SETTLEMENT: 'EARNING', FAILED: 'FAILED' },
-  // terminal
-  DECLINED: {},
-  REJECTED_BY_QC: {},
-  FAILED: {},
+const NEXT: Readonly<Record<DubState, readonly DubState[]>> = {
+  QUEUED: ['DUBBING', 'FAILED'],
+  DUBBING: ['QC', 'FAILED'],
+  QC: ['PUBLISHED', 'REJECTED_BY_QC', 'FAILED'],
+  PUBLISHED: [],
+  REJECTED_BY_QC: [],
+  FAILED: [],
 };
 
 export class InvalidTransitionError extends Error {
-  readonly from: JobState;
-  readonly event: JobEventType;
-
-  constructor(from: JobState, event: JobEventType) {
-    super(
-      isTerminal(from)
-        ? `job is already in terminal state ${from}; cannot apply ${event}`
-        : `cannot apply ${event} to a job in state ${from}`,
-    );
+  constructor(
+    readonly from: DubState,
+    readonly to: DubState,
+  ) {
+    super(`a dub cannot go from ${from} to ${to}`);
     this.name = 'InvalidTransitionError';
-    this.from = from;
-    this.event = event;
   }
 }
 
-/** The reducer. Throws rather than silently ignoring an illegal transition. */
-export function transition(from: JobState, event: JobEventType): JobState {
-  const next = TRANSITIONS[from][event];
-  if (next === undefined) throw new InvalidTransitionError(from, event);
-  return next;
+export function canTransition(from: DubState, to: DubState): boolean {
+  return NEXT[from].includes(to);
 }
 
-/** Non-throwing variant for places that want to branch instead of catch. */
-export function canTransition(from: JobState, event: JobEventType): boolean {
-  return TRANSITIONS[from][event] !== undefined;
+/** Returns `to`, or throws if the move is not allowed. */
+export function transition(from: DubState, to: DubState): DubState {
+  if (!canTransition(from, to)) throw new InvalidTransitionError(from, to);
+  return to;
 }
 
-export function allowedEvents(from: JobState): JobEventType[] {
-  return Object.keys(TRANSITIONS[from]) as JobEventType[];
-}
-
-/** A job is publicly viewable (the dub page serves media) only in these states. */
-export function isPublished(state: JobState): boolean {
-  return state === 'PUBLISHED' || state === 'EARNING' || state === 'SETTLED';
-}
-
-/** Reasons a job can be declined, used verbatim to pick bot copy. */
+/** Why Parrot will not dub a post at all. */
 export const DECLINE_REASONS = [
-  'LOW_EV',
-  'BUDGET_FLOOR',
-  'DAILY_CAP',
-  'MAX_EXPOSURE',
   'TOO_LONG',
+  'TOO_SHORT',
   'UNSUPPORTED_LANGUAGE',
   'NO_VIDEO',
   'NOT_AUTHOR',
+  /** The creator's balance cannot cover any views. */
+  'NO_BALANCE',
+  /** Every language in the plan is already dubbed for this post. */
+  'ALREADY_DUBBED',
 ] as const;
 export type DeclineReason = (typeof DECLINE_REASONS)[number];
 
-/** Reasons a job can hard-fail. */
-export const FAILURE_REASONS = [
-  'PARSE_FAILED',
-  'SOURCE_UNAVAILABLE',
-  'DUBBING_PROVIDER_ERROR',
-  'DUBBING_TIMEOUT',
-  'STORAGE_ERROR',
-  'PAYOUT_ERROR',
-  'INTERNAL_ERROR',
-] as const;
+/** Why a dub that was started did not finish. */
+export const FAILURE_REASONS = ['DUBBING_FAILED', 'DUBBING_TIMEOUT', 'QC_ERROR', 'PUBLISH_FAILED', 'INTERNAL'] as const;
 export type FailureReason = (typeof FAILURE_REASONS)[number];

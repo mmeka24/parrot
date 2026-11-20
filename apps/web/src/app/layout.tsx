@@ -15,14 +15,14 @@ export const metadata: Metadata = {
     siteName: copy.brand.name,
     type: 'website',
     title: copy.brand.name + ' — ' + copy.brand.tagline,
-    description: copy.brand.creatorTagline,
+    description: copy.brand.promise,
   },
   twitter: { card: 'summary_large_image' },
   title: {
     default: copy.brand.name + ' — ' + copy.brand.tagline,
     template: '%s — ' + copy.brand.name,
   },
-  description: copy.brand.creatorTagline,
+  description: copy.brand.promise,
   manifest: '/manifest.webmanifest',
   applicationName: copy.brand.name,
   appleWebApp: { capable: true, title: copy.brand.name, statusBarStyle: 'default' },
@@ -39,7 +39,7 @@ export const viewport: Viewport = {
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const { data: status } = await getSystemStatus();
+  const status = await getSystemStatus();
 
   return (
     <html lang="en">
@@ -48,7 +48,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           {localCopy.nav.skipToContent}
         </a>
         <AccountProvider>
-          <SimulatedBanner items={status.mocked} />
+          <SimulatedBanner items={status?.simulated ?? []} />
           <SiteHeader status={status} />
           <main id="main" className="shell" style={{ paddingBlock: '1.75rem 3rem' }}>
             {children}

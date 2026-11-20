@@ -449,10 +449,7 @@ function watchChip(dub: ExtensionDubDto): HTMLAnchorElement {
       href: dub.watchUrl ?? '#',
       target: '_blank',
       rel: 'noopener',
-      title: fill(t.watchChipTitle, {
-        language: dub.languageName,
-        price: config?.unlockPrice.display ?? '',
-      }),
+      title: fill(t.watchChipTitle, { language: dub.languageName }),
     },
     [el('span', { class: 'tri' }), dub.languageName],
   );
@@ -478,6 +475,13 @@ function languageMenu(
   }
 
   const langs = el('div', { class: 'langs' });
+  // First, and the usual choice: let Parrot pick from what it has learned
+  // about this creator's audience. Offered only before anything is dubbed.
+  if (status.dubs.length === 0) {
+    const auto = el('button', { type: 'button', class: 'lang', role: 'menuitem' }, [t.menuAuto]);
+    auto.addEventListener('click', () => void requestDub(article, postId, null, state));
+    langs.append(auto);
+  }
   for (const language of open) {
     const item = el('button', { type: 'button', class: 'lang', role: 'menuitem' }, [
       language.englishName,
@@ -488,7 +492,7 @@ function languageMenu(
   menu.append(langs);
   menu.append(
     el('p', { class: 'note' }, [
-      fill(t.menuNote, { creatorPercent: config?.creatorPercent ?? 60 }),
+      t.menuNote,
     ]),
   );
   if (status.source === 'page') menu.append(el('p', { class: 'note' }, [t.pageSourceNote]));
@@ -508,7 +512,8 @@ function languageMenu(
 async function requestDub(
   article: HTMLElement,
   postId: string,
-  language: { readonly code: string; readonly englishName: string },
+  /** Null lets Parrot choose the languages. */
+  language: { readonly code: string; readonly englishName: string } | null,
   state: LocalState,
 ): Promise<void> {
   if (!config) return;
@@ -523,7 +528,7 @@ async function requestDub(
     // what it was told about the post, and prices it like any other request.
     const response = await ask({
       type: 'request',
-      body: { postId, languageCode: language.code, requesterHandle: currentHandle() ?? '' },
+      body: { postId, languageCode: language?.code ?? null, requesterHandle: currentHandle() ?? '' },
     });
     state.busy = false;
     if (response.ok) state.sentAt = Date.now();
@@ -533,10 +538,9 @@ async function requestDub(
     return;
   }
 
-  const request = fill(config.requestTemplate, {
-    handle: config.botHandle,
-    language: language.englishName,
-  });
+  const request = language
+    ? fill(config.requestTemplate, { handle: config.botHandle, language: language.englishName })
+    : `@${config.botHandle} dub this`;
   const sent = await replyUnder(article, request);
 
   state.busy = false;

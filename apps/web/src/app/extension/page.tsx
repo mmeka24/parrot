@@ -15,7 +15,7 @@ export default function ExtensionPage() {
         <p style={{ color: 'var(--ink-soft)' }}>
           {copy.brand.name} adds a small strip under every video post. Anyone can see which
           languages a video is already available in. If the video is yours, one click asks for a
-          new dub, and it is made for free.
+          new dub. Parrot pays to make it; you only pay for the views it brings.
         </p>
       </div>
 

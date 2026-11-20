@@ -5,8 +5,8 @@
  */
 
 import { z } from 'zod';
-import { SUPPORTED_LANGUAGE_CODES, CATEGORIES, MAX_SOURCE_DURATION_S } from './constants.js';
-import { JOB_STATES, DECLINE_REASONS, FAILURE_REASONS, JOB_EVENT_TYPES } from './state-machine.js';
+import { SUPPORTED_LANGUAGE_CODES } from './constants.js';
+import { DUB_STATES, DECLINE_REASONS, FAILURE_REASONS } from './state-machine.js';
 
 // ---------------------------------------------------------------------------
 // Primitives
@@ -33,9 +33,7 @@ export const languageCodeSchema = z
     message: `unsupported language; supported: ${SUPPORTED_LANGUAGE_CODES.join(', ')}`,
   });
 
-export const categorySchema = z.enum(CATEGORIES);
-export const jobStateSchema = z.enum(JOB_STATES);
-export const jobEventTypeSchema = z.enum(JOB_EVENT_TYPES);
+export const dubStateSchema = z.enum(DUB_STATES);
 export const declineReasonSchema = z.enum(DECLINE_REASONS);
 export const failureReasonSchema = z.enum(FAILURE_REASONS);
 
@@ -52,7 +50,10 @@ export const parsedIntentSchema = z.object({
   action: z.enum(['dub', 'status', 'earnings', 'unknown']),
   /** The post whose video should be dubbed. Null when the mention is a reply. */
   targetUrl: z.string().url().nullable(),
-  /** Language the requester asked for, as a base code. Null if not stated. */
+  /**
+   * Language the requester asked for, as a base code. Null if not stated, which
+   * means "you choose": Parrot then picks the languages itself.
+   */
   targetLang: z.string().nullable(),
   /** Grok's confidence that it understood the request, 0..1. */
   confidence: z.number().min(0).max(1),
@@ -113,51 +114,6 @@ export const sourcePostSchema = z.object({
 });
 
 export type SourcePost = z.infer<typeof sourcePostSchema>;
-
-/** A fully-validated dubbing request, ready for the decision loop. */
-export const dubRequestSchema = z.object({
-  sourceUrl: z.string().url(),
-  sourcePostId: z.string().min(1),
-  targetLang: languageCodeSchema,
-  durationS: z.number().positive().max(MAX_SOURCE_DURATION_S),
-  requesterXUserId: z.string().min(1),
-});
-
-export type DubRequest = z.infer<typeof dubRequestSchema>;
-
-// ---------------------------------------------------------------------------
-// Decision record (what the dashboard renders in plain language)
-// ---------------------------------------------------------------------------
-
-export const decisionSchema = z.object({
-  agentId: z.string(),
-  agentName: z.string(),
-  decision: z.enum(['APPROVE', 'DECLINE']),
-  declineReason: declineReasonSchema.nullable(),
-  inputs: z.object({
-    predictedViews: z.number().int().nonnegative(),
-    conversionPpm: z.number().int().nonnegative(),
-    pSuccessPpm: z.number().int().nonnegative(),
-    unlockPriceMicros: z.string(),
-    agentBps: z.number().int(),
-    dubCostMicros: z.string(),
-    balanceMicros: z.string(),
-    floorMicros: z.string(),
-    minMarginMicros: z.string(),
-  }),
-  result: z.object({
-    rPerViewMicros: z.string(),
-    expectedRevenueMicros: z.string(),
-    evMicros: z.string(),
-    confidencePpm: z.number().int().nonnegative(),
-    basis: z.enum(['bucket', 'cold_start']),
-  }),
-  /** One or two sentences a non-technical person can read. */
-  rationale: z.string(),
-  decidedAt: z.coerce.date(),
-});
-
-export type Decision = z.infer<typeof decisionSchema>;
 
 // ---------------------------------------------------------------------------
 // QC
@@ -241,45 +197,3 @@ export const elevenLabsSttResponseSchema = z.union([
   elevenLabsSttSchema,
   z.object({ transcripts: z.array(elevenLabsSttSchema).min(1) }),
 ]);
-
-/**
- * One USDC ERC-20 Transfer log, as our QuickNode filter emits it.
- * Values are 6-decimal ERC-20 units (see the double-counting note in chain.ts).
- */
-export const streamTransferSchema = z.object({
-  blockNumber: z.number().int().nonnegative(),
-  txHash: txHashSchema,
-  logIndex: z.number().int().nonnegative(),
-  from: evmAddressSchema,
-  to: evmAddressSchema,
-  /** 6-decimal base units as a string, i.e. micros. */
-  value: z.string().regex(/^\d+$/),
-});
-
-export const streamWebhookPayloadSchema = z.object({
-  movements: z.array(streamTransferSchema),
-});
-
-export type StreamTransfer = z.infer<typeof streamTransferSchema>;
-
-// ---------------------------------------------------------------------------
-// Our own API surface
-// ---------------------------------------------------------------------------
-
-export const unlockRequestSchema = z.object({
-  jobId: z.string().uuid(),
-  viewerAccountId: z.string().uuid().nullable(),
-});
-
-export const claimEarningsRequestSchema = z.object({
-  creatorId: z.string().uuid(),
-  /** Idempotency key - every payout requires one. */
-  requestId: z.string().uuid(),
-});
-
-export const demoTrafficRequestSchema = z.object({
-  jobId: z.string().uuid().optional(),
-  /** Simulated unlocks per minute. */
-  ratePerMinute: z.number().int().min(1).max(600).default(60),
-  enabled: z.boolean(),
-});

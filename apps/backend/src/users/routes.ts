@@ -9,7 +9,8 @@
  */
 
 import type { Express, NextFunction, Request, Response } from 'express';
-import { formatUsd, type ApiErrorDto } from '@parrot/shared';
+import { formatUsd, type ApiErrorDto, type MeDto } from '@parrot/shared';
+import type { UserRow } from './user-db.js';
 import { Accounts, OAUTH_COOKIE, SESSION_COOKIE, readCookie } from './accounts.js';
 import { InvalidEmailError, InvalidSignInError, RateLimitedError } from './auth-service.js';
 
@@ -19,6 +20,8 @@ export interface AuthRoutesOptions {
   readonly allowedOrigins: () => readonly string[];
   /** The signup bonus, for display ("$1.00"). */
   readonly bonusDisplay: string;
+  /** Extra fields for /api/me that the accounts module does not know about. */
+  readonly extendMe?: (user: UserRow) => Partial<MeDto>;
 }
 
 const fail = (res: Response, status: number, code: ApiErrorDto['code'], title: string, detail: string): void => {
@@ -80,6 +83,7 @@ export function registerAuthRoutes(app: Express, o: AuthRoutesOptions): void {
       funding: user.fundStatus,
       // For the curious; the normal screens do not show it.
       address: user.walletAddress,
+      ...(o.extendMe?.(user) ?? {}),
     });
   });
 

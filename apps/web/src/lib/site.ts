@@ -8,3 +8,6 @@
 export const siteUrl = new URL(
   process.env.NEXT_PUBLIC_SITE_URL ?? process.env.PUBLIC_WEB_URL ?? 'http://localhost:3100',
 );
+
+/** Where the timeline lives: the local stand-in in development, X otherwise. */
+export const timelineUrl = (process.env.NEXT_PUBLIC_XCLONE_URL ?? 'http://localhost:3200').replace(/\/$/, '');

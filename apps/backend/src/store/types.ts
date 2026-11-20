@@ -1,38 +1,24 @@
 /**
  * Domain records as the running system holds them.
  *
- * These mirror the Drizzle schema in db/schema.ts but use `bigint` for money
- * and `Date` for times, so the services never touch serialisation concerns.
- * The in-memory store is the default driver (a live demo should not depend on
- * a Postgres container starting); the Drizzle schema is the production path.
+ * Money is `bigint` micro-dollars and times are `Date`, so the services never
+ * touch serialisation concerns. Everything lives in memory (see store.ts): a
+ * live demo should not depend on a database container starting. Signed-in users
+ * and their wallets are the one thing kept on disk (users/user-db.ts).
  */
 
-import type {
-  Category,
-  JobState,
-  JobEventType,
-  DeclineReason,
-  FailureReason,
-  Micros,
-  QcReport,
-  Decision,
-  EngagementSignals,
-} from '@parrot/shared';
+import type { DubState, FailureReason, Micros, PlanRole, QcReport } from '@parrot/shared';
 
-export type AccountKind = 'viewer' | 'creator' | 'agent' | 'treasury' | 'revenue' | 'cost_sink';
+export type AccountKind = 'creator' | 'house';
 
 export type LedgerKind =
-  | 'faucet_funding'
-  | 'starter_credit'
-  | 'unlock_payment'
-  | 'unlock_revenue'
-  | 'agent_share'
-  | 'creator_share'
+  /** Test balance given to a demo creator who has no account of their own. */
+  | 'demo_credit'
+  /** A creator paying for views (negative on the creator, positive on the house). */
+  | 'view_charge'
+  /** What a dub cost to make (negative on the house). */
   | 'dub_cost'
-  | 'settlement_out'
-  | 'settlement_in'
-  | 'creator_payout'
-  /** Aligns a signed-in user's ledger with their on-chain wallet balance. */
+  /** Aligns a signed-in user's ledger with their real balance. */
   | 'wallet_sync';
 
 export interface Account {
@@ -44,6 +30,16 @@ export interface Account {
   createdAt: Date;
 }
 
+export interface LedgerEntry {
+  id: string;
+  accountId: string;
+  /** Signed: positive credits, negative debits. */
+  amount: Micros;
+  kind: LedgerKind;
+  ref: string | null;
+  createdAt: Date;
+}
+
 export interface Creator {
   id: string;
   xUserId: string;
@@ -51,174 +47,114 @@ export interface Creator {
   displayName: string;
   accountId: string;
   followers: number;
-  claimed: boolean;
+  /** The signed-in user this page belongs to. Null for a demo creator. */
+  userId: string | null;
+  /** What a view is worth to them, per 1,000 views. Their own number. */
+  valuePerThousand: Micros;
+  /** True until they set `valuePerThousand` themselves. */
+  valueIsDefault: boolean;
+  /** The most one post's dubs can cost them. */
+  postBudget: Micros;
+  /** Dub every new video post without being asked. */
+  autoDub: boolean;
+  /** The language their videos are in; never a dub target. */
+  sourceLang: string;
+  /** Set when a charge could not be covered; cleared when one goes through. */
+  lowBalance: boolean;
   createdAt: Date;
 }
 
-export interface Agent {
-  id: string;
-  name: string;
-  persona: string;
-  accountId: string;
-  walletAddress: string | null;
-  floor: Micros;
-  minMargin: Micros;
-  maxExposurePerJob: Micros;
-  dailyCap: Micros;
-  /** Restricts this agent to one language, for the specialist persona. */
-  languageFocus: string | null;
-  /** ppm multiplier applied to its own view estimate; >1e6 is optimistic. */
-  optimismPpm: number;
-  active: boolean;
-  /**
-   * A third-party agent's own bidding endpoint. When set, the auction asks it
-   * for a bid instead of using the built-in formula. Budget rules still bind.
-   */
-  bidUrl?: string | null;
-  /**
-   * How this agent's forecasts have matched reality: actual / planned viewers,
-   * learned from its resolved jobs. 1e6 = no correction. An agent that keeps
-   * over-forecasting is scaled down, so optimism alone cannot win auctions.
-   */
-  calibrationPpm?: number;
-  /**
-   * Bring-your-own dubber: the agent's own dubbing endpoint (see
-   * external-dubbing.ts). Unset means the house provider, ElevenLabs.
-   */
-  dubUrl?: string | null;
-  /** Shown on QC reports, e.g. "HeyGen". Defaults to ElevenLabs. */
-  dubProvider?: string | null;
-  /** What this agent's dubbing costs, per minute of source. */
-  dubCostPerMinute?: Micros | null;
-}
-
-export interface Job {
+/** One post of a creator's that Parrot dubbed, and the plan it was dubbed under. */
+export interface DubbedPost {
   id: string;
   creatorId: string;
-  sourceUrl: string;
   sourcePostId: string;
-  requestMentionId: string | null;
-  targetLang: string;
+  sourceUrl: string;
+  text: string;
   durationS: number;
-  category: Category;
-  state: JobState;
-  claimedByAgentId: string | null;
-  claimedAt: Date | null;
-  splitAgentBps: number;
-  splitCreatorBps: number;
+  /** Views on the original when it was dubbed. */
+  originalViews: number | null;
+  mode: 'explore' | 'focus' | 'requested';
+  /** The plan's one-line summary at the time. */
+  summary: string;
+  /** The creator's per-post budget when the dubs were ordered. */
+  budget: Micros;
+  /** When its results started counting toward the next plan. */
+  measuredAt: Date | null;
+  demoAudience: 'none' | 'arriving' | 'done';
+  createdAt: Date;
+}
+
+export interface Dub {
+  id: string;
+  postId: string;
+  creatorId: string;
+  lang: string;
+  role: PlanRole | 'requested';
+  state: DubState;
+  /** What it cost to make. Parrot pays this. */
   dubCost: Micros;
-  decision: Decision | null;
-  qcReport: QcReport | null;
+  /** True when no real dub was bought: the audio is a stand-in. */
+  simulatedDub: boolean;
   providerJobId: string | null;
-  dubUrl: string | null;
-  previewUrl: string | null;
-  posterUrl: string | null;
-  declineReason: DeclineReason | null;
+  /** Local path of the rendered dub. */
+  mediaPath: string | null;
+  /** The dub as posted in the thread. */
+  replyPostId: string | null;
+  replyUrl: string | null;
+  qcReport: QcReport | null;
   failureReason: FailureReason | null;
-  signals: EngagementSignals | null;
-  /** Realised international views. Simulated in demo mode. */
-  viewCount: number;
-  /**
-   * Demo determinism: when true, the fallback QC gate fails this job on
-   * purpose. The brief requires a visible QC rejection, and a randomly-failing
-   * gate would sometimes deny the demo its loss path.
-   */
+  /** Why it did not go live, worded for the creator. */
+  problem: string | null;
+  /** Views on the dub's post, as the timeline reports them. */
+  xViews: number;
+  /** Unique viewers on Parrot's own page for the dub. */
+  pageViews: number;
+  /** Of `xViews`, how many came from the demo audience. */
+  simulatedViews: number;
+  /** Views already charged for. Never more than xViews + pageViews. */
+  billedViews: number;
+  /** What the creator has been charged for this dub. */
+  paid: Micros;
+  likes: number;
+  replies: number;
+  reposts: number;
+  /** Country code -> viewers, from Parrot's page (and the demo audience). */
+  countries: Record<string, number>;
+  /** Language code -> replies written in it. */
+  replyLanguages: Record<string, number>;
+  /** Demo: fail this dub at the quality check on purpose, and say so. */
   qcDemoFail: boolean;
   createdAt: Date;
   publishedAt: Date | null;
 }
 
-export interface JobEvent {
-  id: string;
-  jobId: string | null;
-  type: JobEventType;
-  fromState: JobState | null;
-  toState: JobState | null;
-  payload: Record<string, unknown> | null;
-  txHash: string | null;
-  createdAt: Date;
+export type ChargeStatus = 'pending' | 'confirmed' | 'failed';
+
+export interface ChargeLine {
+  dubId: string;
+  lang: string;
+  views: number;
+  amount: Micros;
 }
 
-export interface Unlock {
+/** One payment from a creator for a batch of views across their dubs. */
+export interface Charge {
   id: string;
-  jobId: string;
-  viewerAccountId: string;
+  creatorId: string;
   amount: Micros;
-  agentShare: Micros;
-  creatorShare: Micros;
-  paymentRef: string | null;
-  simulated: boolean;
-  settledAt: Date | null;
-  createdAt: Date;
-}
-
-export type SettlementStatus = 'pending' | 'confirmed' | 'failed';
-
-export interface Settlement {
-  id: string;
-  jobId: string | null;
-  toAccountId: string;
-  amount: Micros;
-  kind: LedgerKind;
+  views: number;
+  lines: ChargeLine[];
+  status: ChargeStatus;
+  /** Set only for a payment that was really sent and confirmed. */
   txHash: string | null;
-  idempotencyKey: string;
-  status: SettlementStatus;
+  /** True when no real money moved (a demo balance). */
+  testMode: boolean;
+  /** True when some of the views came from the demo audience. */
+  simulatedViews: boolean;
   error: string | null;
-  simulated: boolean;
   createdAt: Date;
   confirmedAt: Date | null;
-}
-
-export interface LedgerEntry {
-  id: string;
-  accountId: string;
-  /** Signed: positive credits, negative debits. */
-  amount: Micros;
-  kind: LedgerKind;
-  jobId: string | null;
-  ref: string | null;
-  createdAt: Date;
-}
-
-export interface PredictionRecord {
-  id: string;
-  jobId: string;
-  category: Category;
-  lang: string;
-  predictedViews: number;
-  predictedConvPpm: number;
-  confidencePpm: number;
-  engagementScore: number;
-  basis: 'bucket' | 'cold_start';
-  actualViews: number | null;
-  actualUnlocks: number | null;
-  actualConvPpm: number | null;
-  errorRatio: number | null;
-  simulated: boolean;
-  resolvedAt: Date | null;
-  createdAt: Date;
-}
-
-export interface BucketStatsRecord {
-  category: Category;
-  lang: string;
-  avgViews: number;
-  avgEngagementScore: number;
-  conversionPpm: number;
-  n: number;
-  updatedAt: Date;
-}
-
-export interface ChainTransfer {
-  id: string;
-  blockNumber: bigint;
-  txHash: string;
-  logIndex: number;
-  fromAddress: string;
-  toAddress: string;
-  value: Micros;
-  settlementId: string | null;
-  receivedAt: Date;
 }
 
 export interface BotPost {
@@ -241,11 +177,13 @@ export interface BotPost {
   hasVideo: boolean;
   videoDurationS: number | null;
   /**
-   * Local path of a really-uploaded source video (clone posts only). Absent on
-   * the seeded demo posts, which have a duration but no media behind them.
+   * Local path of the media behind the post: an uploaded source clip, or a
+   * rendered dub. Absent on the seeded demo posts, which have a duration but
+   * no media behind them.
    */
   videoPath?: string | null;
-  jobId: string | null;
+  /** The dub this post carries, when it is one of Parrot's dub posts. */
+  dubId: string | null;
   /** False when this is a mock post rather than a real one from X. */
   posted: boolean;
 }
@@ -275,7 +213,7 @@ export interface ObservedPost {
 
 export interface ProcessedMention {
   mentionId: string;
-  jobId: string | null;
+  postId: string | null;
   outcome: string;
   processedAt: Date;
 }

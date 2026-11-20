@@ -4,24 +4,52 @@
  */
 
 import { parseUsd, type Micros } from './units.js';
-import { ppm, type Ppm } from './ppm.js';
 
 // ---------------------------------------------------------------------------
-// Viewer pricing and the revenue split
+// What a creator pays
 // ---------------------------------------------------------------------------
 
-/** What a viewer pays to unlock a dub. */
-export const UNLOCK_PRICE: Micros = parseUsd('0.02');
+/**
+ * The creator pays this for each view a dub actually gets: $1 per 1,000 views.
+ * Viewers never pay. Parrot pays for every dub up front, so a dub that nobody
+ * watches costs the creator almost nothing and costs Parrot the dub.
+ */
+export const PRICE_PER_VIEW: Micros = parseUsd('0.001');
 
-/** Default split: the agent recoups its cost, the creator keeps the larger share. */
-export const DEFAULT_SPLIT_AGENT_BPS = 4_000; // 40%
-export const DEFAULT_SPLIT_CREATOR_BPS = 6_000; // 60%
+/**
+ * What a view is worth to the creator, per 1,000 views, until they set their
+ * own number. ASSUMPTION, shown as "your rate" everywhere: it is a mid-range
+ * sponsor rate, not money anyone was paid. A creator should replace it with
+ * their own figure (their payout divided by their views, or their sponsor rate).
+ */
+export const DEFAULT_VALUE_PER_THOUSAND_VIEWS: Micros = parseUsd('8.00');
 
-/** Test-mode starter credit granted to a new viewer at first unlock. */
-export const VIEWER_STARTER_CREDIT: Micros = parseUsd('1.00');
+/** The most one post's dubs can cost a creator, until they change it. */
+export const DEFAULT_POST_BUDGET: Micros = parseUsd('5.00');
 
-/** Per-viewer unlock cap per rolling window, to stop a runaway script. */
-export const VIEWER_UNLOCK_CAP_PER_HOUR = 60;
+/** Charges below this wait for the next batch rather than being sent as dust. */
+export const MIN_CHARGE: Micros = parseUsd('0.01');
+
+/** Test-mode balance for a demo creator who has no account of their own. */
+export const DEMO_CREATOR_BALANCE: Micros = parseUsd('25.00');
+
+// ---------------------------------------------------------------------------
+// Choosing languages (language-plan.ts)
+// ---------------------------------------------------------------------------
+
+/** How many languages a post is dubbed into while Parrot is still learning. */
+export const EXPLORE_LANGUAGE_COUNT = 6;
+/** How many posts Parrot spends learning before it narrows down. */
+export const EXPLORE_POSTS = 2;
+/** The most proven languages a post is dubbed into once Parrot has learned. */
+export const MAX_WINNERS = 3;
+/** A dropped language gets one more try every this many posts. */
+export const RETEST_EVERY_POSTS = 5;
+/**
+ * A first try that reaches less than this fraction of what a dub needs to pay
+ * for itself is a clear miss, and the language is dropped at once.
+ */
+export const CLEAR_MISS_RATIO = 0.25;
 
 // ---------------------------------------------------------------------------
 // Dubbing cost (ElevenLabs)
@@ -32,9 +60,8 @@ export const VIEWER_UNLOCK_CAP_PER_HOUR = 60;
  * Source: https://elevenlabs.io/pricing/api (checked 2026-11-15)
  *
  * Dubbing v1 is what we use: it is the only tier whose API returns a muxed
- * audio/video byte stream, and at $0.50/min it keeps a 2-cent unlock economy
- * viable. v2 at $2.20/min would need ~4x the unlocks to break even, which we
- * note in the README rather than hide.
+ * audio/video byte stream. At $0.50/min a 30-second dub costs $0.25, so at
+ * $1 per 1,000 views it pays for itself at 250 views.
  */
 export const ELEVENLABS_PRICE_PER_MINUTE = {
   v1_watermarked: parseUsd('0.33'),
@@ -42,10 +69,10 @@ export const ELEVENLABS_PRICE_PER_MINUTE = {
   v2: parseUsd('2.20'),
 } as const;
 
-/** The tier the agent actually buys. */
+/** The tier Parrot buys. */
 export const DUBBING_TIER: keyof typeof ELEVENLABS_PRICE_PER_MINUTE = 'v1_clean';
 
-/** Longest clip the agent will consider dubbing. */
+/** Longest clip Parrot will dub. */
 export const MAX_SOURCE_DURATION_S = 180;
 /** Shortest clip worth dubbing. */
 export const MIN_SOURCE_DURATION_S = 5;
@@ -57,47 +84,15 @@ export const MIN_SOURCE_DURATION_S = 5;
 export const ELEVENLABS_MAX_CONCURRENT_DUBS = 3;
 
 // ---------------------------------------------------------------------------
-// Agent defaults
+// Demo reach
 // ---------------------------------------------------------------------------
-
-/** Default budget floor: an agent never spends itself below this. */
-export const DEFAULT_BUDGET_FLOOR: Micros = parseUsd('1.00');
-/** Default minimum EV required to take a bet. */
-export const DEFAULT_MIN_MARGIN: Micros = parseUsd('0.10');
-/** Most an agent will risk on a single dub. */
-export const DEFAULT_MAX_EXPOSURE_PER_JOB: Micros = parseUsd('2.00');
-/** Most an agent will spend in a day. */
-export const DEFAULT_DAILY_CAP: Micros = parseUsd('10.00');
-
-/** Cold-start p_success before an agent has any QC history. */
-export const COLD_START_P_SUCCESS: Ppm = ppm(700_000); // 70%
-/** Cold-start view-to-unlock conversion before a bucket has history. */
-export const COLD_START_CONVERSION: Ppm = ppm(125_000); // 12.5%
-
-// ---------------------------------------------------------------------------
-// The cold-start funnel (predictor.ts). Each step is a low / likely / high
-// range, so a cautious agent can plan on the low end and a bold one on the
-// high end. Every number says where it comes from; the ones marked ASSUMPTION
-// are what the learning loop is there to correct.
-// ---------------------------------------------------------------------------
-
-/** One funnel step's range. `low` always means "fewer dub viewers". */
-export interface FunnelRange {
-  readonly low: number;
-  readonly likely: number;
-  readonly high: number;
-}
 
 /**
- * Step 1 fallback, only when a post's view count is missing (X shows it on
- * every post, so normally step 1 is read, not guessed): interactions per view.
- * A HIGHER rate means FEWER views, so `low` holds the highest rate.
- * Source: quartiles (p75 / median / p25) of 31 real English video posts on X,
- * pulled via Grok X search on 2026-11-20. The sample lives in
- * packages/shared/test/fixtures/real-x-video-posts.json and
- * predictor.test.ts fails if these drift from it.
+ * Interactions per view on an English video post on X (median 2.7%).
+ * Source: 31 real posts pulled via Grok X search on 2026-11-20. Used only to
+ * give a simulated post plausible likes and reposts.
  */
-export const INTERACTIONS_PER_VIEW: FunnelRange = { low: 0.076, likely: 0.027, high: 0.017 };
+export const INTERACTIONS_PER_VIEW = { low: 0.076, likely: 0.027, high: 0.017 } as const;
 
 /** Reach presets Chirp offers for a demo video post (see simulatedEngagement). */
 export const DEMO_REACH_PRESETS = [50_000, 250_000, 1_200_000, 5_000_000] as const;
@@ -127,52 +122,16 @@ export function simulatedEngagement(views: number): {
 /** X's worldwide ad-reachable audience. Source: DataReportal, October 2026. */
 export const X_AD_REACH_MILLIONS = 433;
 
-/**
- * Step 3: how well an English post reaches a language's market, relative to
- * that market's share of X. 1.0 would mean the post reached every market in
- * proportion to its size. English posts mostly circulate among English
- * speakers, and the big non-English X markets have low-to-moderate English
- * proficiency (EF English Proficiency Index: Mexico, Brazil, Japan and
- * Indonesia all rank "low" or "moderate"), so a third of the proportional
- * share is the likely case. ASSUMPTION - measured per language once the
- * learning loop has data. (Was 0.25 / 0.5 / 0.75, which assumed half of every
- * market sees a typical English post.)
- */
-export const MARKET_REACH: FunnelRange = { low: 0.2, likely: 0.35, high: 0.5 };
-
-/**
- * Step 4: of the viewers in that language market, how many open the dub.
- * ASSUMPTION. Here the dub is a link in a reply, so this is a link
- * click-through: organic link posts on X typically see ~1-3% of impressions
- * click, and only part of a post's audience ever opens its replies. A dub in
- * the viewer's own language should beat a generic link, so 2% is the likely
- * case and 5% the optimistic one. (Was 2% / 5% / 15%; 15% would beat most paid
- * ads.) Upper sanity bound: YouTube reports creators with dubbed audio
- * tracks get over 25% of watch time from those tracks - but there switching is
- * one tap inside the player, while here it is a reply link, so we sit far
- * below. https://blog.youtube/news-and-events/multi-language-audio-mrbeast-interview/
- */
-export const DUB_UPTAKE: FunnelRange = { low: 0.01, likely: 0.02, high: 0.05 };
-
-/** Smoothing factor for the learning loop. */
-export const LEARNING_ALPHA: Ppm = ppm(300_000); // 0.3
-/** Observations needed before a bucket is trusted over the cold-start prior. */
-export const BUCKET_CONFIDENCE_N = 5;
-
 // ---------------------------------------------------------------------------
-// Settlement cadence
+// Charging cadence
 // ---------------------------------------------------------------------------
 
-/** Settle on-chain once this much is owed, whichever comes first... */
-export const SETTLEMENT_THRESHOLD: Micros = parseUsd('0.10');
-/** ...or once this long has passed with anything owed. */
-export const SETTLEMENT_INTERVAL_MS = 60_000;
-/** In demo mode, settle fast enough for judges to watch it happen. */
-export const DEMO_SETTLEMENT_INTERVAL_MS = 15_000;
-
-/** Demo mode compresses the 24h learning loop into this. */
-export const DEMO_LEARNING_DELAY_MS = 60_000;
-export const REAL_LEARNING_DELAY_MS = 24 * 60 * 60 * 1000;
+/** How often owed view charges are swept into one payment per creator. */
+export const BILLING_INTERVAL_MS = 60 * 60_000;
+/** In demo mode, charge often enough to watch it happen. */
+export const DEMO_BILLING_INTERVAL_MS = 12_000;
+/** How often view counts are read back from the timeline. */
+export const VIEW_SYNC_INTERVAL_MS = 4_000;
 
 // ---------------------------------------------------------------------------
 // Languages
@@ -199,48 +158,76 @@ export interface LanguageSpec {
   readonly nativeName: string;
   readonly xAudienceMillions: number;
   readonly audienceBasis: string;
+  /** Shown next to the language name. One flag cannot stand for a language; it is a label. */
+  readonly flag: string;
+  /**
+   * The main markets for the language, with rough weights that sum to 1. Used
+   * to name where simulated demo viewers come from; real viewers report their
+   * own country.
+   */
+  readonly markets: readonly { readonly code: string; readonly name: string; readonly weight: number }[];
 }
 
 export const SUPPORTED_LANGUAGES: readonly LanguageSpec[] = [
   {
     code: 'es', englishName: 'Spanish', nativeName: 'Espanol', xAudienceMillions: 35,
     audienceBasis: 'Mexico 15.5M (DataReportal) + ~20M estimated for Spain, Argentina, Colombia and the rest of Latin America',
+    flag: '\u{1F1EA}\u{1F1F8}',
+    markets: [{ code: 'MX', name: 'Mexico', weight: 0.45 }, { code: 'ES', name: 'Spain', weight: 0.2 }, { code: 'AR', name: 'Argentina', weight: 0.2 }, { code: 'CO', name: 'Colombia', weight: 0.15 }],
   },
   {
     code: 'pt', englishName: 'Portuguese', nativeName: 'Portugues', xAudienceMillions: 19.5,
     audienceBasis: 'Brazil 18.6M (DataReportal) + ~1M estimated for Portugal',
+    flag: '\u{1F1E7}\u{1F1F7}',
+    markets: [{ code: 'BR', name: 'Brazil', weight: 0.92 }, { code: 'PT', name: 'Portugal', weight: 0.08 }],
   },
   {
     code: 'hi', englishName: 'Hindi', nativeName: 'Hindi', xAudienceMillions: 9,
     audienceBasis: 'India 22.9M (DataReportal), of whom we assume ~40% would rather watch in Hindi than English',
+    flag: '\u{1F1EE}\u{1F1F3}',
+    markets: [{ code: 'IN', name: 'India', weight: 1 }],
   },
   {
     code: 'fr', englishName: 'French', nativeName: 'Francais', xAudienceMillions: 12,
     audienceBasis: 'Estimate: France, Belgium, Quebec and francophone Africa (none in the published top ten)',
+    flag: '\u{1F1EB}\u{1F1F7}',
+    markets: [{ code: 'FR', name: 'France', weight: 0.7 }, { code: 'CA', name: 'Canada', weight: 0.15 }, { code: 'BE', name: 'Belgium', weight: 0.15 }],
   },
   {
     code: 'de', englishName: 'German', nativeName: 'Deutsch', xAudienceMillions: 8,
     audienceBasis: 'Estimate: Germany, Austria and Switzerland (none in the published top ten)',
+    flag: '\u{1F1E9}\u{1F1EA}',
+    markets: [{ code: 'DE', name: 'Germany', weight: 0.8 }, { code: 'AT', name: 'Austria', weight: 0.1 }, { code: 'CH', name: 'Switzerland', weight: 0.1 }],
   },
   {
     code: 'ja', englishName: 'Japanese', nativeName: 'Nihongo', xAudienceMillions: 54.8,
     audienceBasis: 'Japan 54.8M (DataReportal)',
+    flag: '\u{1F1EF}\u{1F1F5}',
+    markets: [{ code: 'JP', name: 'Japan', weight: 1 }],
   },
   {
     code: 'ko', englishName: 'Korean', nativeName: 'Hangugeo', xAudienceMillions: 10,
     audienceBasis: 'South Korea ~10.1M (2025 figure; not in the 2026 top ten)',
+    flag: '\u{1F1F0}\u{1F1F7}',
+    markets: [{ code: 'KR', name: 'South Korea', weight: 1 }],
   },
   {
     code: 'ar', englishName: 'Arabic', nativeName: 'Arabiyya', xAudienceMillions: 23.5,
     audienceBasis: 'Saudi Arabia 13.5M (DataReportal) + ~10M estimated for Egypt, the Gulf and North Africa',
+    flag: '\u{1F1F8}\u{1F1E6}',
+    markets: [{ code: 'SA', name: 'Saudi Arabia', weight: 0.55 }, { code: 'EG', name: 'Egypt', weight: 0.3 }, { code: 'AE', name: 'UAE', weight: 0.15 }],
   },
   {
     code: 'id', englishName: 'Indonesian', nativeName: 'Bahasa Indonesia', xAudienceMillions: 20.1,
     audienceBasis: 'Indonesia 20.1M (DataReportal)',
+    flag: '\u{1F1EE}\u{1F1E9}',
+    markets: [{ code: 'ID', name: 'Indonesia', weight: 1 }],
   },
   {
     code: 'en', englishName: 'English', nativeName: 'English', xAudienceMillions: 110,
     audienceBasis: 'US 77.3M + UK 15.2M (DataReportal) + ~17M estimated for Canada, Australia and others',
+    flag: '\u{1F1FA}\u{1F1F8}',
+    markets: [{ code: 'US', name: 'United States', weight: 0.7 }, { code: 'GB', name: 'United Kingdom', weight: 0.15 }, { code: 'CA', name: 'Canada', weight: 0.15 }],
   },
 ] as const;
 
@@ -286,29 +273,9 @@ export function languageName(code: string): string {
   return languageByCode(code)?.englishName ?? code;
 }
 
-// ---------------------------------------------------------------------------
-// Content categories (the other half of a prediction bucket)
-// ---------------------------------------------------------------------------
-
-export const CATEGORIES = [
-  'comedy',
-  'education',
-  'music',
-  'news',
-  'sports',
-  'tech',
-  'lifestyle',
-  'gaming',
-  'other',
-] as const;
-export type Category = (typeof CATEGORIES)[number];
-
-// ---------------------------------------------------------------------------
-// Media
-// ---------------------------------------------------------------------------
-
-/** Seconds of the dub a viewer can watch before being asked to unlock. */
-export const PREVIEW_SECONDS = 8;
+export function languageFlag(code: string): string {
+  return languageByCode(code)?.flag ?? '';
+}
 
 // ---------------------------------------------------------------------------
 // QC thresholds
@@ -316,8 +283,6 @@ export const PREVIEW_SECONDS = 8;
 
 /** Dub duration must be within this fraction of the source duration. */
 export const QC_DURATION_TOLERANCE = 0.1;
-/** ElevenLabs STT must report the target language with at least this confidence. */
-export const QC_MIN_LANGUAGE_CONFIDENCE = 0.6;
 /**
  * Back-translation: the independent judge's 0-100 score for how well the dub
  * keeps the original's meaning must reach this. 70 = "minor losses at most".

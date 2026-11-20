@@ -31,6 +31,8 @@ import {
   type XThreadDto,
   type XTimelineDto,
   type XUserDto,
+  type XViewResponseDto,
+  languageByCode,
 } from '@parrot/shared';
 import type { Store } from '../store/store.js';
 import type { BotPost } from '../store/types.js';
@@ -44,7 +46,9 @@ export interface XCloneDeps {
   /** False when the bot is wired to the real X API; the stand-in is then off. */
   enabled: boolean;
   /** Runs the REAL bot path for a mention that is already in the store. */
-  processMentionById: (mentionId: string) => Promise<string | null>;
+  processMentionById: (mentionId: string) => Promise<unknown>;
+  /** Told about every new top-level video post, so auto-dub can act on it. */
+  onVideoPost?: (postId: string, authorHandle: string) => Promise<void>;
 }
 
 const HANDLE_PATTERN = /^[A-Za-z0-9_]{1,15}$/;
@@ -108,6 +112,21 @@ export function registerXCloneRoutes(app: Express, deps: XCloneDeps): void {
         post.hasVideo && post.videoDurationS !== null
           ? { durationS: post.videoDurationS, url: mediaUrl(post.videoPath ?? null) }
           : null,
+      dub: dubInfo(post),
+    };
+  };
+
+  /** What a dub post carries, so the timeline can label it. */
+  const dubInfo = (post: BotPost): XPostDto['dub'] => {
+    const dub = post.dubId ? store.getDub(post.dubId) : undefined;
+    if (!dub) return null;
+    const spec = languageByCode(dub.lang);
+    return {
+      languageCode: dub.lang,
+      languageName: spec?.englishName ?? dub.lang,
+      nativeName: spec?.nativeName ?? dub.lang,
+      flag: spec?.flag ?? '',
+      simulated: dub.simulatedDub,
     };
   };
 
@@ -252,7 +271,7 @@ export function registerXCloneRoutes(app: Express, deps: XCloneDeps): void {
     }
 
     // Demo reach: only for a top-level video post, and bounded. A fresh post
-    // has no views, and the agents would (correctly) never dub it.
+    // has no views; this gives it some, labelled as simulated.
     const requestedViews = Number(body.simulatedViews ?? 0);
     const metrics =
       video !== null && inReplyToId === null && Number.isFinite(requestedViews) && requestedViews > 0
@@ -261,7 +280,21 @@ export function registerXCloneRoutes(app: Express, deps: XCloneDeps): void {
 
     const created = mockX.createPost({ text, authorHandle, inReplyToPostId: inReplyToId, video, metrics });
     bumpReplies(inReplyToId);
+    if (video !== null && inReplyToId === null && deps.onVideoPost) {
+      void deps.onVideoPost(created.id, authorHandle).catch((error: unknown) => {
+        console.error('[x-clone] auto-dub failed', error);
+      });
+    }
     res.json(postDto(created));
+  });
+
+  // The stand-in's own view counter. A view is counted when a post's video is
+  // played, which is roughly what the real service counts.
+  app.post('/api/x/posts/:id/view', (req, res) => {
+    const post = store.botPosts.get(req.params.id);
+    if (!post) return fail(res, 404, 'This post does not exist', 'It may have been removed.');
+    const payload: XViewResponseDto = { views: mockX.addViews(post.id, 1) };
+    res.json(payload);
   });
 
   function bumpReplies(parentId: string | null): void {

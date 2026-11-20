@@ -2,8 +2,8 @@
  * The clone's client for its own backend (/api/x/*).
  *
  * Every shape comes from @parrot/shared. Note what is NOT here: nothing under
- * /api/extension, and nothing about dubs. Chirp does not know Parrot exists -
- * a dub request is just a reply, and Parrot's answer is just another reply.
+ * /api/extension. A dub request is just a reply, and each of Parrot's dubs is
+ * just another video reply - with its own view count, like any other post.
  */
 
 import type {
@@ -14,6 +14,7 @@ import type {
   XPostDto,
   XThreadDto,
   XTimelineDto,
+  XViewResponseDto,
 } from '@parrot/shared';
 
 export const BACKEND_URL = (
@@ -78,4 +79,9 @@ export function uploadVideo(file: File): Promise<XMediaUploadDto> {
     headers: { 'content-type': file.type },
     body: file,
   });
+}
+
+/** Count a view on a post, as the timeline itself would when its video plays. */
+export function recordView(id: string): Promise<XViewResponseDto> {
+  return request<XViewResponseDto>(`/api/x/posts/${encodeURIComponent(id)}/view`, { method: 'POST' });
 }

@@ -57,10 +57,10 @@ describe('forbidden words', () => {
 
 describe('the documented exception', () => {
   it('keeps "Verify on Arc" as the only chain-facing phrase in user copy', () => {
-    expect(copy.receipt.verifyLink).toBe('Verify on Arc');
+    expect(copy.payment.verifyLink).toBe('Verify on Arc');
     // It names the network but uses none of the banned vocabulary.
     const banned = FORBIDDEN_WORDS.filter((w) =>
-      new RegExp(`\\b${w.replace(/[-]/g, '\\-')}\\b`, 'i').test(copy.receipt.verifyLink),
+      new RegExp(`\\b${w.replace(/[-]/g, '\\-')}\\b`, 'i').test(copy.payment.verifyLink),
     );
     expect(banned).toEqual([]);
   });
@@ -97,22 +97,21 @@ describe('copy quality', () => {
 
 describe('fill', () => {
   it('substitutes placeholders', () => {
-    expect(fill(copy.viewer.unlockCta, { price: '$0.02' })).toBe('Unlock for $0.02');
-    expect(fill(copy.creator.claimCta, { amount: '$0.84' })).toBe('Claim $0.84');
+    expect(fill(copy.payment.title, { views: '1,200' })).toBe('Paid for 1,200 views');
   });
 
-  it('fills multiple placeholders including repeats', () => {
-    expect(
-      fill(copy.bot.dailySummaryReply, { language: 'Spanish', amount: '$0.84', count: 70 }),
-    ).toBe('Your Spanish dub earned $0.84 from 70 viewers today.');
+  it('fills multiple placeholders', () => {
+    expect(fill(copy.bot.duplicateReply, { language: 'Spanish', link: 'https://x/w/1' })).toBe(
+      'Already dubbed this one into Spanish -> https://x/w/1',
+    );
   });
 
-  it('throws rather than shipping "{amount}" to a user', () => {
-    expect(() => fill(copy.creator.claimCta, {})).toThrow(/placeholder \{amount\}/);
+  it('throws rather than shipping "{views}" to a user', () => {
+    expect(() => fill(copy.payment.title, {})).toThrow(/placeholder \{views\}/);
   });
 
   it('leaves strings without placeholders untouched', () => {
-    expect(fill(copy.viewer.shareCta, {})).toBe('Share');
+    expect(fill(copy.status.published, {})).toBe('Live');
   });
 
   it('every placeholder in the tree is a plain identifier', () => {

@@ -1,15 +1,14 @@
 /**
  * The bot's three promises: it only ever speaks in words from copy.ts, it only
- * dubs for the person who owns the video, and it never does the same job twice.
+ * dubs for the person who owns the video, and it never acts on a request twice.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   DECLINE_REASONS,
+  DUB_STATES,
   FORBIDDEN_WORDS,
-  JOB_STATES,
   copy,
-  parseUsd,
   mentionSchema,
   type Mention,
   type SourcePost,
@@ -18,8 +17,8 @@ import { Store } from '../src/store/store.js';
 import {
   BotService,
   RateLimiter,
-  composeReply,
   declineLine,
+  replies,
   isAuthorised,
   statusPhrase,
   watchLink,
@@ -27,7 +26,7 @@ import {
 import { MockXAdapter, MOCK_EPOCH_MS } from '../src/bot/mock-x-adapter.js';
 
 const WEB = 'http://localhost:3000';
-const LINK = watchLink('job-1', WEB);
+const LINK = watchLink('dub-1', WEB);
 
 let store: Store;
 let adapter: MockXAdapter;
@@ -41,43 +40,20 @@ beforeEach(() => {
 
 /** One of every reply the bot can send, for the blanket checks below. */
 function everyReply(): Array<{ kind: string; text: string; hasLink: boolean }> {
-  const replies: Array<{ kind: string; text: string; hasLink: boolean }> = [
-    { kind: 'accepted', text: composeReply('accepted', { language: 'es' }), hasLink: false },
-    {
-      kind: 'published',
-      text: composeReply('published', { language: 'es', link: LINK }),
-      hasLink: true,
-    },
-    {
-      kind: 'duplicate',
-      text: composeReply('duplicate', { language: 'pt', link: LINK }),
-      hasLink: true,
-    },
-    { kind: 'qcFailed', text: composeReply('qcFailed'), hasLink: false },
-    {
-      kind: 'firstUnlock',
-      text: composeReply('firstUnlock', { language: 'hi', amount: parseUsd('0.012') }),
-      hasLink: false,
-    },
-    {
-      kind: 'dailySummary',
-      text: composeReply('dailySummary', { language: 'ja', amount: parseUsd('1.24'), count: 62 }),
-      hasLink: false,
-    },
-    { kind: 'error', text: composeReply('error'), hasLink: false },
-    { kind: 'rateLimited', text: composeReply('rateLimited'), hasLink: false },
+  const all: Array<{ kind: string; text: string; hasLink: boolean }> = [
+    { kind: 'plan:one', text: replies.plan(['es']), hasLink: false },
+    { kind: 'plan:six', text: replies.plan(['ja', 'es', 'ar', 'id', 'pt', 'fr']), hasLink: false },
+    { kind: 'dubPost', text: replies.dubPost('pt', LINK), hasLink: true },
+    { kind: 'duplicate', text: replies.duplicate('pt', LINK), hasLink: true },
+    { kind: 'qcFailed', text: replies.qcFailed('fr'), hasLink: false },
+    { kind: 'failed', text: replies.failed('hi'), hasLink: false },
+    { kind: 'error', text: replies.error(), hasLink: false },
+    { kind: 'rateLimited', text: replies.rateLimited(), hasLink: false },
   ];
   for (const reason of DECLINE_REASONS) {
-    replies.push({ kind: `declined:${reason}`, text: composeReply('declined', { reason }), hasLink: false });
+    all.push({ kind: `declined:${reason}`, text: replies.declined(reason), hasLink: false });
   }
-  for (const state of JOB_STATES) {
-    replies.push({
-      kind: `status:${state}`,
-      text: composeReply('status', { state, detail: 'I will shout when it is live.' }),
-      hasLink: false,
-    });
-  }
-  return replies;
+  return all;
 }
 
 describe('reply composition', () => {
@@ -100,41 +76,35 @@ describe('reply composition', () => {
   });
 
   it('builds every reply out of copy.bot, not local strings', () => {
-    expect(composeReply('accepted', { language: 'es' })).toContain('Squawk!');
-    expect(composeReply('qcFailed')).toBe(copy.bot.qcFailedReply);
-    expect(composeReply('error')).toBe(copy.bot.errorReply);
-    expect(composeReply('rateLimited')).toBe(copy.bot.rateLimitedReply);
+    expect(replies.error()).toBe(copy.bot.errorReply);
+    expect(replies.rateLimited()).toBe(copy.bot.rateLimitedReply);
   });
 
-  it('turns language codes into names a creator recognises', () => {
-    expect(composeReply('accepted', { language: 'es' })).toContain('Spanish');
-    expect(composeReply('published', { language: 'pt', link: LINK })).toContain('Portuguese');
-    expect(composeReply('published', { language: 'pt', link: LINK })).toContain(LINK);
+  it('names every language in the plan, in words a creator recognises', () => {
+    expect(replies.plan(['es'])).toContain('Spanish');
+    const plan = replies.plan(['es', 'pt', 'hi']);
+    expect(plan).toContain('Spanish, Portuguese and Hindi');
+  });
+
+  it('posts a dub under its own language name, with the link to watch it', () => {
+    const text = replies.dubPost('pt', LINK);
+    expect(text).toContain('Portugues');
+    expect(text).toContain('Portuguese');
+    expect(text).toContain(LINK);
   });
 
   it('gives each decline its own one-line reason', () => {
     const lines = new Set(DECLINE_REASONS.map((r) => declineLine(r)));
-    // BUDGET_FLOOR / DAILY_CAP / MAX_EXPOSURE deliberately share one line.
-    expect(lines.size).toBe(6);
-    expect(composeReply('declined', { reason: 'NOT_AUTHOR' })).toContain(
-      copy.bot.declineReasonNotAuthor,
-    );
-    expect(composeReply('declined', { reason: 'NO_VIDEO' })).toContain(
-      copy.bot.declineReasonNoVideo,
-    );
+    expect(lines.size).toBe(DECLINE_REASONS.length);
+    expect(replies.declined('NOT_AUTHOR')).toContain(copy.bot.declineReasonNotAuthor);
+    expect(replies.declined('NO_VIDEO')).toContain(copy.bot.declineReasonNoVideo);
   });
 
-  it('renders money already formatted as dollars', () => {
-    expect(composeReply('firstUnlock', { language: 'es', amount: parseUsd('0.012') })).toContain(
-      '$0.01',
-    );
-  });
-
-  it('covers every job state with a plain-language phrase', () => {
-    for (const state of JOB_STATES) {
+  it('covers every dub state with a plain-language phrase', () => {
+    for (const state of DUB_STATES) {
       expect(statusPhrase(state).length).toBeGreaterThan(0);
     }
-    expect(composeReply('status', { state: 'DUBBING' })).toBe('That one is being dubbed.');
+    expect(statusPhrase('PUBLISHED')).toBe('Live');
   });
 });
 
@@ -161,7 +131,7 @@ describe('authorisation', () => {
     expect(isAuthorised(mention(), post)).toBe(true);
   });
 
-  it('blocks a stranger from dubbing someone else video and taking the earnings', async () => {
+  it('blocks a stranger from dubbing someone else video and running up their bill', async () => {
     const post = await adapter.getPost('mock-post-1');
     const stranger = mention({ id: 'mention-2', authorId: 'x-user-devtoni', authorHandle: 'devtoni' });
     expect(isAuthorised(stranger, post)).toBe(false);
@@ -185,7 +155,7 @@ describe('authorisation', () => {
   });
 
   it('declines a non-author in words the creator can read', () => {
-    expect(composeReply('declined', { reason: 'NOT_AUTHOR' })).toContain('only the person who posted');
+    expect(replies.declined('NOT_AUTHOR')).toContain('only the person who posted');
   });
 });
 
@@ -209,11 +179,11 @@ describe('dedupe', () => {
     expect(again.filter((x) => x.id === m.id)).toHaveLength(1);
   });
 
-  it('records the outcome against the job', () => {
+  it('records the outcome against the post', () => {
     service.claimMention('mention-9');
-    service.recordOutcome('mention-9', 'job-1', 'published');
-    expect(store.processedMentions.get('mention-9')?.jobId).toBe('job-1');
-    expect(store.processedMentions.get('mention-9')?.outcome).toBe('published');
+    service.recordOutcome('mention-9', 'post-1', 'started');
+    expect(store.processedMentions.get('mention-9')?.postId).toBe('post-1');
+    expect(store.processedMentions.get('mention-9')?.outcome).toBe('started');
   });
 });
 
@@ -233,9 +203,9 @@ describe('rate limiting', () => {
 
   it('says so in copy instead of going silent', async () => {
     const limited = new BotService(store, adapter, { webBaseUrl: WEB, replyLimit: 1 });
-    const first = await limited.send('mock-post-1', composeReply('accepted', { language: 'es' }));
+    const first = await limited.send('mock-post-1', replies.plan(['es']));
     expect(first.sent).toBe(true);
-    const second = await limited.send('mock-post-1', composeReply('accepted', { language: 'es' }));
+    const second = await limited.send('mock-post-1', replies.plan(['es']));
     expect(second.sent).toBe(false);
     expect(second.suppressedBy).toBe('rate_limit');
     expect(second.text).toBe(copy.bot.rateLimitedReply);
@@ -248,7 +218,7 @@ describe('the mock X', () => {
     expect(service.isMock).toBe(true);
   });
 
-  it('seeds the viral worked example', async () => {
+  it('seeds a viral post to dub', async () => {
     const post = await adapter.getPost('mock-post-1');
     expect(post?.authorHandle).toBe('maria');
     expect(post?.authorFollowers).toBe(50_000);
@@ -269,14 +239,14 @@ describe('the mock X', () => {
   });
 
   it('records a reply as an unposted post, because nothing was sent to X', async () => {
-    const result = await service.send('mock-post-1', composeReply('accepted', { language: 'es' }));
+    const result = await service.send('mock-post-1', replies.plan(['es']));
     expect(result.sent).toBe(true);
     expect(result.reply?.posted).toBe(false);
     const recorded = store.botPosts.get(result.reply?.id ?? '');
     expect(recorded?.isBot).toBe(true);
     expect(recorded?.posted).toBe(false);
     expect(recorded?.inReplyToId).toBe('mock-post-1');
-    expect(store.timeline()).toContainEqual(recorded);
+    expect([...store.botPosts.values()].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())).toContainEqual(recorded);
   });
 
   it('hands injected mentions back with the real parent author attached', async () => {

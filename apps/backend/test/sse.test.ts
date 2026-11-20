@@ -1,9 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { ServerEventDto, TickerEntryDto } from '@parrot/shared';
+import type { ServerEventDto } from '@parrot/shared';
 import { SseHub, type SseResponse } from '../src/feed/sse.js';
-import { RpcFallbackPoller, type ChainLogSource } from '../src/feed/rpc-fallback.js';
-import { WebhookIngestor } from '../src/feed/webhook.js';
-import { Store } from '../src/store/store.js';
 
 /** A minimal stand-in for an Express response. */
 class FakeResponse implements SseResponse {
@@ -51,17 +48,9 @@ class FakeResponse implements SseResponse {
   }
 }
 
+/** An event a dashboard would act on; `id` stands in for a creator's name. */
 function tickerEvent(id: string): ServerEventDto {
-  const entry: TickerEntryDto = {
-    id,
-    kind: 'settlement',
-    text: 'test',
-    amount: null,
-    at: '2026-11-15T00:00:00.000Z',
-    verifyUrl: null,
-    simulated: false,
-  };
-  return { type: 'ticker', entry };
+  return { type: 'creator', handle: id, reason: 'views' };
 }
 
 describe('SseHub', () => {
@@ -98,7 +87,7 @@ describe('SseHub', () => {
     expect(a.events()).toHaveLength(1);
     expect(b.events()).toHaveLength(1);
     expect(a.events()[0]).toEqual(tickerEvent('one'));
-    expect(a.chunks.at(-1)).toMatch(/^id: \d+\nevent: ticker\ndata: /);
+    expect(a.chunks.at(-1)).toMatch(/^id: \d+\nevent: creator\ndata: /);
   });
 
   it('heartbeats on its interval and stops when the last client leaves', () => {
@@ -150,7 +139,7 @@ describe('SseHub', () => {
     const late = new FakeResponse();
     hub.subscribe(late);
 
-    const ids = late.events().map((e) => (e.type === 'ticker' ? e.entry.id : e.type));
+    const ids = late.events().map((e) => (e.type === 'creator' ? e.handle : e.type));
     expect(ids).toEqual(['two', 'three', 'four']);
     expect(hub.recent()).toHaveLength(3);
   });
@@ -178,102 +167,5 @@ describe('SseHub', () => {
     hub.broadcast(tickerEvent('one'));
     expect(hub.clientCount).toBe(1);
     expect(healthy.events()).toHaveLength(1);
-  });
-});
-
-describe('RpcFallbackPoller', () => {
-  let store: Store;
-  let hub: SseHub;
-  let ingestor: WebhookIngestor;
-  let now: Date;
-
-  const logs: ChainLogSource = {
-    getBlockNumber: async () => 100n,
-    getTransferLogs: async () => [
-      {
-        blockNumber: 100,
-        txHash: `0x${'aa'.repeat(32)}`,
-        logIndex: 0,
-        from: '0x1111111111111111111111111111111111111111',
-        to: '0x2222222222222222222222222222222222222222',
-        value: '5000',
-      },
-    ],
-  };
-
-  beforeEach(() => {
-    now = new Date('2026-11-15T12:00:00.000Z');
-    store = new Store();
-    hub = new SseHub({ heartbeatMs: 60_000 });
-    ingestor = new WebhookIngestor({ store, hub, now: () => now });
-  });
-
-  afterEach(() => {
-    hub.closeAll();
-  });
-
-  function poller(overrides: Partial<ConstructorParameters<typeof RpcFallbackPoller>[0]> = {}) {
-    return new RpcFallbackPoller({
-      store,
-      ingestor,
-      source: logs,
-      now: () => now,
-      ...overrides,
-    });
-  }
-
-  it('reports source "simulated" when nothing is wired up and nothing has happened', () => {
-    const status = poller().status();
-    expect(status.source).toBe('simulated');
-    expect(status.live).toBe(false);
-    expect(status.latestBlock).toBeNull();
-  });
-
-  it('polls when no stream is configured and feeds the same ingest path', async () => {
-    const p = poller();
-    expect(p.isStreamStale()).toBe(true);
-    expect(await p.pollOnce()).toBe(1);
-    expect(store.latestBlock()).toBe(100n);
-    expect(p.status().source).toBe('rpc_polling');
-    expect(p.status().latestBlock).toBe('100');
-    expect(p.status().live).toBe(true);
-  });
-
-  it('dedupes across a poll that overlaps a webhook delivery', async () => {
-    const p = poller();
-    await p.pollOnce();
-    // A second poll re-reads the same block range after the cursor is reset.
-    const second = poller();
-    expect(await second.pollOnce()).toBe(0);
-    expect(store.chainTransfers.size).toBe(1);
-  });
-
-  it('stands by while a configured stream is delivering, and takes over when it goes stale', async () => {
-    const p = poller({ streamConfigured: true, stalenessMs: 30_000 });
-    ingestor.acceptWebhook(JSON.stringify({ movements: [] }));
-
-    expect(p.isStreamStale()).toBe(false);
-    expect(await p.pollOnce()).toBe(0);
-    expect(p.status().source).toBe('quicknode_stream');
-
-    now = new Date(now.getTime() + 60_000);
-    expect(p.isStreamStale()).toBe(true);
-    expect(await p.pollOnce()).toBe(1);
-    expect(p.status().source).toBe('rpc_polling');
-  });
-
-  it('survives an RPC error without throwing', async () => {
-    const errors: unknown[] = [];
-    const p = poller({
-      source: {
-        getBlockNumber: async () => {
-          throw new Error('rpc down');
-        },
-        getTransferLogs: async () => [],
-      },
-      onError: (e) => errors.push(e),
-    });
-    expect(await p.pollOnce()).toBe(0);
-    expect(errors).toHaveLength(1);
   });
 });
